@@ -1,0 +1,239 @@
+import Foundation
+
+enum JMError: Error {
+    case badResponse, decryptFailed, http(Int)
+    case server(String)   // business error with the server's own message (errorMsg)
+}
+
+/// Client for the JM (jmapp3) JSON API.
+/// Protocol (reverse-engineered from the official web client and verified live):
+///  - bootstrap: GET /setting -> data.jm3_version (no signing headers needed)
+///  - every request: headers  token = md5(ts + seed),  tokenparam = "<ts>,<jm3_version>"
+///  - when signed in: Authorization: Bearer <jwttoken>, Cookie: AVS=<member s>
+///  - response envelope {code, data, errorMsg?}; `data` for content endpoints is a base64
+///    AES-256-ECB ciphertext whose key is the token hex string itself.
+final class JMClient {
+    static let shared = JMClient()
+
+    private let seed = "185Hcomic3PAPP7R"
+    private var apiHosts = ["www.cdngwc.net", "www.cdnhjk.net"]
+    private var version: String?
+    private let session: URLSession
+
+    private init() {
+        let cfg = URLSessionConfiguration.default
+        cfg.timeoutIntervalForRequest = 25
+        cfg.waitsForConnectivity = true
+        session = URLSession(configuration: cfg)
+    }
+
+    // MARK: - content endpoints
+
+    func latest(page: Int) async throws -> [Comic] {
+        let data = try await request("latest", params: ["page": "\(page)"])
+        guard let arr = data as? [Any] else { return [] }
+        return arr.compactMap { ($0 as? [String: Any]).map(Comic.init(dict:)) }
+    }
+
+    func search(query: String, page: Int) async throws -> (total: Int, items: [Comic]) {
+        let data = try await request("search", params: ["search_query": query, "page": "\(page)"])
+        guard let obj = data as? [String: Any] else { return (0, []) }
+        return (anyInt(obj["total"]), Self.comicList(obj))
+    }
+
+    func album(id: String) async throws -> AlbumDetail {
+        let data = try await request("album", params: ["id": id])
+        guard let obj = data as? [String: Any] else { throw JMError.badResponse }
+        return AlbumDetail(dict: obj)
+    }
+
+    func chapter(id: String) async throws -> ChapterData {
+        let data = try await request("chapter", params: ["id": id])
+        guard let obj = data as? [String: Any] else { throw JMError.badResponse }
+        return ChapterData(dict: obj)
+    }
+
+    func promote() async throws -> [PromoSection] {
+        let data = try await request("promote", params: [:])
+        guard let arr = data as? [Any] else { return [] }
+        return arr.compactMap { ($0 as? [String: Any]).flatMap(PromoSection.init(dict:)) }
+    }
+
+    func randomRecommend() async throws -> [Comic] {
+        let data = try await request("random_recommend", params: [:])
+        guard let arr = data as? [Any] else { return [] }
+        return arr.compactMap { ($0 as? [String: Any]).map(Comic.init(dict:)) }
+    }
+
+    // MARK: - categories
+
+    func categories() async throws -> [JMCategory] {
+        let data = try await request("categories", params: [:])
+        guard let obj = data as? [String: Any], let arr = obj["categories"] as? [Any] else { return [] }
+        return arr.compactMap { ($0 as? [String: Any]).map(JMCategory.init(dict:)) }
+            .filter { !$0.slug.isEmpty }
+    }
+
+    /// Category listing; `c` is the category slug (e.g. "doujin"), `o` the sort order ("new").
+    func categoryFilter(slug: String, page: Int) async throws -> (total: Int, items: [Comic]) {
+        let data = try await request("categories/filter",
+                                      params: ["c": slug, "o": "new", "page": "\(page)"])
+        guard let obj = data as? [String: Any] else { return (0, []) }
+        return (anyInt(obj["total"]), Self.comicList(obj))
+    }
+
+    // MARK: - member endpoints
+
+    // MARK: daily check-in
+
+    func dailyInfo(userId: Int) async throws -> DailyInfo {
+        let data = try await request("daily", params: ["user_id": "\(userId)"])
+        guard let dict = data as? [String: Any] else { throw JMError.badResponse }
+        return DailyInfo(dict: dict)
+    }
+
+    /// Returns the server's reward message (e.g. "Jcoin:2 EXP:2"); daily_id is required —
+    /// without it the server silently returns an empty success and nothing is signed.
+    func dailyCheck(userId: Int, dailyId: Int) async throws -> String {
+        let data = try await postForm("daily_chk", fields: ["user_id": "\(userId)", "daily_id": "\(dailyId)"])
+        if let dict = data as? [String: Any], let msg = dict["msg"] as? String { return msg }
+        return ""
+    }
+
+    /// On success returns the raw member-info dictionary (contains jwttoken, s, username...).
+    func login(username: String, password: String) async throws -> [String: Any] {
+        let data = try await postForm("login", fields: ["username": username, "password": password])
+        guard let obj = data as? [String: Any] else { throw JMError.badResponse }
+        return obj
+    }
+
+    func favorites(page: Int) async throws -> (total: Int, items: [Comic]) {
+        let data = try await request("favorite", params: ["page": "\(page)"])
+        if let obj = data as? [String: Any] {
+            return (anyInt(obj["total"]), Self.comicList(obj))
+        }
+        if let arr = data as? [Any] {
+            let items = arr.compactMap { ($0 as? [String: Any]).map(Comic.init(dict:)) }
+            return (items.count, items)
+        }
+        return (0, [])
+    }
+
+    func addFavorite(albumId: String) async throws {
+        _ = try await postForm("favorite", fields: ["aid": albumId])
+    }
+
+    static func comicList(_ obj: [String: Any]) -> [Comic] {
+        let raw = (obj["content"] as? [Any]) ?? (obj["list"] as? [Any]) ?? []
+        return raw.compactMap { ($0 as? [String: Any]).map(Comic.init(dict:)) }
+    }
+
+    // MARK: - transport
+
+    private func bootstrapVersion() async {
+        if version != nil { return }
+        for host in apiHosts {
+            var comps = URLComponents(string: "https://\(host)/setting")!
+            comps.queryItems = [URLQueryItem(name: "app_img_shunt", value: "1"),
+                                URLQueryItem(name: "lang", value: "TW")]
+            guard let url = comps.url else { continue }
+            var req = URLRequest(url: url)
+            req.setValue(Self.ua, forHTTPHeaderField: "User-Agent")
+            if let (data, _) = try? await session.data(for: req),
+               let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+               let d = obj["data"] as? [String: Any],
+               let v = d["jm3_version"] as? String, !v.isEmpty {
+                version = v
+                return
+            }
+        }
+        version = "2.1.12"
+    }
+
+    private static let ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.7 Mobile/15E148 Safari/604.1"
+
+    private func request(_ path: String, params: [String: String]) async throws -> Any {
+        await bootstrapVersion()
+        var lastError: Error = JMError.badResponse
+        for host in apiHosts {
+            do { return try await getOnce(host: host, path: path, params: params) }
+            catch { lastError = error }
+        }
+        throw lastError
+    }
+
+    private func postForm(_ path: String, fields: [String: String]) async throws -> Any {
+        await bootstrapVersion()
+        var lastError: Error = JMError.badResponse
+        for host in apiHosts {
+            do { return try await postOnce(host: host, path: path, fields: fields) }
+            catch { lastError = error }
+        }
+        throw lastError
+    }
+
+    private func signedRequest(host: String, path: String, params: [String: String]) -> (URLRequest, String) {
+        let ts = "\(Int(Date().timeIntervalSince1970))"
+        let token = JMCrypto.md5Hex(ts + seed)
+        var comps = URLComponents(string: "https://\(host)/\(path)")!
+        var items = params.map { URLQueryItem(name: $0.key, value: $0.value) }
+        items.append(URLQueryItem(name: "lang", value: "TW"))
+        comps.queryItems = items
+        var req = URLRequest(url: comps.url!)
+        req.setValue(token, forHTTPHeaderField: "token")
+        req.setValue("\(ts),\(version ?? "2.1.12")", forHTTPHeaderField: "tokenparam")
+        req.setValue(Self.ua, forHTTPHeaderField: "User-Agent")
+        req.setValue("*/*", forHTTPHeaderField: "Accept")
+        if let auth = AccountStore.currentAuth {
+            req.setValue("Bearer \(auth.jwt)", forHTTPHeaderField: "Authorization")
+            if !auth.avs.isEmpty { req.setValue("AVS=\(auth.avs)", forHTTPHeaderField: "Cookie") }
+        }
+        return (req, token)
+    }
+
+    private func getOnce(host: String, path: String, params: [String: String]) async throws -> Any {
+        let (req, token) = signedRequest(host: host, path: path, params: params)
+        let (data, resp) = try await session.data(for: req)
+        return try decodeEnvelope(data: data, response: resp, token: token)
+    }
+
+    private func postOnce(host: String, path: String, fields: [String: String]) async throws -> Any {
+        var (req, token) = signedRequest(host: host, path: path, params: [:])
+        req.httpMethod = "POST"
+        let boundary = "----JMReaderBoundary7d1a9"
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        var body = Data()
+        for (k, v) in fields {
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"\(k)\"\r\n\r\n".data(using: .utf8)!)
+            body.append("\(v)\r\n".data(using: .utf8)!)
+        }
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+        req.httpBody = body
+        let (data, resp) = try await session.data(for: req)
+        return try decodeEnvelope(data: data, response: resp, token: token)
+    }
+
+    private func decodeEnvelope(data: Data, response: URLResponse, token: String) throws -> Any {
+        guard let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            throw JMError.badResponse
+        }
+        let code = anyInt(obj["code"])
+        if code != 200 {
+            if let msg = obj["errorMsg"] as? String, !msg.isEmpty {
+                throw JMError.server(msg)
+            }
+            if let http = response as? HTTPURLResponse { throw JMError.http(http.statusCode) }
+            throw JMError.badResponse
+        }
+        let payload = obj["data"]
+        if let enc = payload as? String {
+            guard let plain = JMCrypto.aesECBDecrypt(base64: enc, keyString: token),
+                  let decoded = try? JSONSerialization.jsonObject(with: plain) else {
+                throw JMError.decryptFailed
+            }
+            return decoded
+        }
+        return payload as Any
+    }
+}
