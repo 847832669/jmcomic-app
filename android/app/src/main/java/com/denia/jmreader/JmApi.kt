@@ -79,7 +79,19 @@ object JmApi {
     suspend fun callForm(path: String, form: Map<String, String>): JSONObject =
         request("POST", path, emptyMap(), form)
 
+    /** Signed GET for endpoints whose decrypted `data` is a bare JSON array
+     *  (promote / latest / random_recommend — shapes verified live 2026-11-02). */
+    suspend fun callArray(path: String, params: Map<String, String> = emptyMap()): JSONArray {
+        val d = requestData("GET", path, params, null, skipBootstrap = false)
+        return d as? JSONArray ?: JSONArray()
+    }
+
     private suspend fun request(method: String, path: String, params: Map<String, String>, form: Map<String, String>?, skipBootstrap: Boolean = false): JSONObject {
+        val d = requestData(method, path, params, form, skipBootstrap)
+        return d as? JSONObject ?: JSONObject()
+    }
+
+    private suspend fun requestData(method: String, path: String, params: Map<String, String>, form: Map<String, String>?, skipBootstrap: Boolean = false): Any {
         if (!skipBootstrap) bootstrap()
         return withContext(Dispatchers.IO) {
             val (token, tokenParam) = tokenPair()
@@ -115,9 +127,13 @@ object JmApi {
                 val data = env.opt("data") ?: throw ApiException("无数据")
                 when (data) {
                     is JSONObject -> data
+                    is JSONArray -> data
                     is String -> {
                         if (data.isEmpty()) JSONObject()
-                        else try { JSONObject(decrypt(data, token)) }
+                        else try {
+                            val text = decrypt(data, token).trim()
+                            if (text.startsWith("[")) JSONArray(text) else JSONObject(text)
+                        }
                         catch (e: Exception) { JSONObject().put("_raw", data) }
                     }
                     else -> JSONObject().put("_raw", data.toString())
@@ -128,19 +144,19 @@ object JmApi {
 
     // ---------- endpoints ----------
     suspend fun promote(): List<Pair<String, List<Album>>> {
-        val d = call("promote")
+        // Live shape: bare array of sections {title, content[]} (verified 2026-11-02).
+        val arr = callArray("promote")
         val out = mutableListOf<Pair<String, List<Album>>>()
-        val arr = d.optJSONArray("content") ?: return out
         for (i in 0 until arr.length()) {
             val sec = arr.optJSONObject(i) ?: continue
-            val title = sec.optString("name")
+            val title = sec.optString("title")
             val items = parseAlbums(sec.optJSONArray("content"))
             if (items.isNotEmpty()) out.add(title to items)
         }
         return out
     }
 
-    suspend fun latest(page: Int): List<Album> = parseAlbums(call("latest", mapOf("page" to page.toString())).optJSONArray("content"))
+    suspend fun latest(page: Int): List<Album> = parseAlbums(callArray("latest", mapOf("page" to page.toString())))
 
     suspend fun search(query: String, page: Int): Pair<Int, List<Album>> {
         val d = call("search", mapOf("search_query" to query, "page" to page.toString()))
@@ -150,7 +166,8 @@ object JmApi {
     data class Category(val slug: String, val name: String)
     suspend fun categories(): List<Category> {
         val d = call("categories")
-        val arr = d.optJSONArray("content") ?: return emptyList()
+        // Live shape: {categories: [{slug, name}...], blocks: [...]} (verified 2026-11-02).
+        val arr = d.optJSONArray("categories") ?: return emptyList()
         val out = mutableListOf<Category>()
         for (i in 0 until arr.length()) {
             val o = arr.optJSONObject(i) ?: continue
@@ -162,7 +179,7 @@ object JmApi {
     suspend fun categoryFilter(slug: String, page: Int): List<Album> =
         parseAlbums(call("categories/filter", mapOf("c" to slug, "o" to "new", "page" to page.toString())).optJSONArray("content"))
 
-    suspend fun randomRecommend(): List<Album> = parseAlbums(call("random_recommend").optJSONArray("content"))
+    suspend fun randomRecommend(): List<Album> = parseAlbums(callArray("random_recommend"))
 
     suspend fun album(id: String): JSONObject = call("album", mapOf("id" to id))
     suspend fun chapter(id: String): JSONObject = call("chapter", mapOf("id" to id))
@@ -172,7 +189,8 @@ object JmApi {
 
     suspend fun favorites(page: Int): Pair<Int, List<Album>> {
         val d = call("favorite", mapOf("page" to page.toString()))
-        return d.optInt("total") to parseAlbums(d.optJSONArray("content"))
+        // Live shape: items live under "list", not "content" (verified 2026-11-02).
+        return d.optInt("total") to parseAlbums(d.optJSONArray("list"))
     }
 
     suspend fun addFavorite(aid: String) { callForm("favorite", mapOf("aid" to aid)) }

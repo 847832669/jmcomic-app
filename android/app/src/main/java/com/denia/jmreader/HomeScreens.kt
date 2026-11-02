@@ -100,7 +100,7 @@ fun HomeScreen(router: Router, goProfile: () -> Unit) {
 
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Image(painterResource(R.mipmap.ic_launcher), contentDescription = null,
+            Image(painterResource(R.drawable.avatar), contentDescription = null,
                 modifier = Modifier.size(38.dp).clip(CircleShape).clickable { goProfile() })
             Spacer(Modifier.width(10.dp))
             Text("JM Reader", fontSize = 19.sp, fontWeight = FontWeight.Bold)
