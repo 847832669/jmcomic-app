@@ -11,9 +11,9 @@ JM Reader 的 Android 版本（Kotlin + Jetpack Compose），与 iOS 版同一�
 - 首页推荐货架 + 频道、搜索（带历史）、官方分类浏览
 - 详情页：作者作品页、标签展开、章节列表
 - 阅读器：上下滚动，图片自动解打乱还原
-- 个人页：账号登录、云端 + 本地收藏（可搜索）、个人资料、每日签到
-- Material 3 + 粉色主题
+- 个人页：账号登录、云端 + 本地收藏（可搜索）、个人资料、每日签到、屏蔽标签、存储空间
+- 与 iOS 统一的设计：粉色主题、玻璃卡片、毛玻璃悬浮底栏
 
 ## 构建
 
-环境：JDK 17、Android SDK 34、Gradle 8.7。在本目录放置 `local.properties` 指向本机 SDK 后执行 `gradle assembleDebug`，产物位于 `app/build/outputs/apk/debug/`。
+环境：JDK 17、Android SDK 35、Gradle 8.7。在本目录放置 `local.properties` 指向本机 SDK 后执行 `gradle assembleDebug`，产物位于 `app/build/outputs/apk/debug/`。
