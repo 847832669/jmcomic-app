@@ -104,27 +104,26 @@ struct ReaderView: View {
             .foregroundColor(.white)
             .padding(.horizontal, 12)
             Spacer()
-            VStack(spacing: 6) {
-                HStack {
-                    Button("‹ 上一话") { stepChapter(-1) }
-                        .disabled(chapterIndex == nil || chapterIndex == 0)
-                    Spacer()
-                    Text(pages.isEmpty ? "" : "\(currentPage + 1) / \(pages.count)")
-                        .font(.caption).foregroundColor(accentPink)
-                    Spacer()
-                    Button("下一话 ›") { stepChapter(1) }
-                        .disabled(chapterIndex == nil || chapterIndex == chapters.count - 1)
-                }
-                .font(.subheadline).foregroundColor(.white)
+            // Single slim row, about as tall as the round chrome buttons:
+            // prev / page count / slider / next (user-approved mock, 2026-11-03).
+            HStack(spacing: 10) {
+                Button("‹ 上一话") { stepChapter(-1) }
+                    .disabled(chapterIndex == nil || chapterIndex == 0)
                 if !pages.isEmpty {
+                    Text("\(currentPage + 1) / \(pages.count)")
+                        .font(.footnote).foregroundColor(accentPink)
+                        .fixedSize()
                     Slider(value: $sliderValue, in: 0...Double(max(pages.count - 1, 1)), step: 1) { editing in
                         if !editing { jumpTarget = Int(sliderValue) }
                     }
                     .tint(accentPink)
                 }
+                Button("下一话 ›") { stepChapter(1) }
+                    .disabled(chapterIndex == nil || chapterIndex == chapters.count - 1)
             }
-            .padding(.horizontal, 16).padding(.vertical, 12)
-            .glassSurface(RoundedRectangle(cornerRadius: 24))
+            .font(.subheadline).foregroundColor(.white)
+            .padding(.horizontal, 16).padding(.vertical, 10)
+            .glassSurface(RoundedRectangle(cornerRadius: 30))
             .padding(.horizontal, 10).padding(.bottom, 8)
         }
         .transition(.opacity)
