@@ -20,7 +20,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import coil.imageLoader
 import org.json.JSONObject
 import java.io.File
 
@@ -28,11 +31,20 @@ import java.io.File
 @Composable
 fun ProfileScreen(router: Router, account: AccountStore, library: LibraryStore) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     var loggedIn by remember { mutableStateOf(account.isLoggedIn) }
+    var stats by remember { mutableStateOf(account.stats) }
+    var storageBytes by remember { mutableStateOf<Long?>(null) }
     var user by remember { mutableStateOf("") }
     var pass by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var msg by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(Unit) {
+        storageBytes = withContext(Dispatchers.IO) {
+            val p = storageParts(context); p.first + p.second
+        }
+    }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         if (!loggedIn) {
@@ -49,6 +61,7 @@ fun ProfileScreen(router: Router, account: AccountStore, library: LibraryStore) 
                     try {
                         val d = JmApi.login(user.trim(), pass)
                         account.saveLogin(d, user.trim())
+                        stats = account.stats
                         loggedIn = true
                     } catch (e: Exception) { msg = e.message }
                     busy = false
@@ -64,9 +77,9 @@ fun ProfileScreen(router: Router, account: AccountStore, library: LibraryStore) 
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(account.username ?: "", fontSize = 18.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.weight(1f))
-                TextButton(onClick = { account.logout(); loggedIn = false }) { Text("退出", color = Pink) }
+                TextButton(onClick = { account.logout(); stats = null; loggedIn = false }) { Text("退出", color = Pink) }
             }
-            account.stats?.let { st ->
+            stats?.let { st ->
                 Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceVariant,
                     modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
                     Column(Modifier.padding(14.dp)) {
@@ -83,6 +96,23 @@ fun ProfileScreen(router: Router, account: AccountStore, library: LibraryStore) 
                             color = Pink, modifier = Modifier.fillMaxWidth())
                         Text("可收藏 ${st.favCount} / ${st.favMax}", fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
+                    }
+                }
+            }
+            if (stats == null) {
+                // exp / level / coin only arrive with the login response; a
+                // session kept alive across updates may have none cached.
+                Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceVariant,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
+                    Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("账号数据未同步", fontWeight = FontWeight.Bold)
+                            Text("经验、等级、金币在登录时同步，重新登录一次即可显示",
+                                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        TextButton(onClick = { account.logout(); stats = null; loggedIn = false }) {
+                            Text("重新登录", color = Pink)
+                        }
                     }
                 }
             }
@@ -103,8 +133,22 @@ fun ProfileScreen(router: Router, account: AccountStore, library: LibraryStore) 
             }
         }
 
+        Spacer(Modifier.height(10.dp))
+        Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceVariant,
+            modifier = Modifier.fillMaxWidth().clickable { router.push(StorageDest) }) {
+            Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("存储空间", fontWeight = FontWeight.Bold)
+                Spacer(Modifier.weight(1f))
+                storageBytes?.let {
+                    Text(android.text.format.Formatter.formatFileSize(context, it), fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Text(" ›", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+
         Spacer(Modifier.height(18.dp))
-        FavoritesSection(router, account, library, loggedIn)
+        FavoritesSection(router, account, library, loggedIn, onCloudTotal = { stats = account.stats })
     }
 }
 
@@ -207,7 +251,7 @@ fun CheckinCard(account: AccountStore) {
 }
 
 @Composable
-fun FavoritesSection(router: Router, account: AccountStore, library: LibraryStore, loggedIn: Boolean) {
+fun FavoritesSection(router: Router, account: AccountStore, library: LibraryStore, loggedIn: Boolean, onCloudTotal: () -> Unit = {}) {
     var tab by remember { mutableIntStateOf(if (loggedIn) 0 else 1) } // 0 cloud, 1 local
     var query by remember { mutableStateOf("") }
     var cloud by remember { mutableStateOf<List<JmApi.Album>>(emptyList()) }
@@ -222,6 +266,8 @@ fun FavoritesSection(router: Router, account: AccountStore, library: LibraryStor
                 try {
                     val (total, first) = JmApi.favorites(1)
                     cloudTotal = total; cloud = first
+                    account.syncFavCount(total)
+                    onCloudTotal()
                 } catch (e: Exception) {}
             }
         }
@@ -486,5 +532,112 @@ fun BlockedTagsScreen(router: Router) {
             Text("在首页、分类、搜索等列表中，标题或作者含屏蔽词的作品会直接隐藏；作品的真实标签会随着浏览自动记录，之后按标签过滤。收藏与历史不受影响。",
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+    }
+}
+
+// ---------------- Storage / 存储空间 ----------------
+
+/** (image-cache bytes, downloaded-books bytes, downloaded-book count). Call off the main thread. */
+fun storageParts(context: android.content.Context): Triple<Long, Long, Int> {
+    val img = runCatching { context.imageLoader.diskCache?.size ?: 0L }.getOrDefault(0L)
+    val dir = File(context.filesDir, "Downloads")
+    var dl = 0L
+    var count = 0
+    dir.listFiles()?.forEach { f ->
+        if (f.isFile && (f.extension.equals("pdf", true) || f.extension.equals("cbz", true))) {
+            dl += f.length(); count++
+        }
+    }
+    return Triple(img, dl, count)
+}
+
+@Composable
+fun StorageScreen(router: Router) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var imgBytes by remember { mutableStateOf(0L) }
+    var dlBytes by remember { mutableStateOf(0L) }
+    var dlCount by remember { mutableStateOf(0) }
+    var confirm by remember { mutableStateOf(false) }
+    var cleared by remember { mutableStateOf(false) }
+
+    suspend fun reload() {
+        val p = withContext(Dispatchers.IO) { storageParts(context) }
+        imgBytes = p.first; dlBytes = p.second; dlCount = p.third
+    }
+    LaunchedEffect(Unit) { reload() }
+
+    fun fmt(b: Long) = android.text.format.Formatter.formatFileSize(context, b)
+
+    Column(Modifier.fillMaxSize()) {
+        TopBar(title = "存储空间") { router.pop() }
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+            Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(vertical = 18.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("总占用", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(fmt(imgBytes + dlBytes), fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Pink)
+                }
+            }
+            Spacer(Modifier.height(14.dp))
+            Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier.fillMaxWidth()) {
+                Column {
+                    Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("图片缓存", fontWeight = FontWeight.Bold)
+                            Text("看过的封面与漫画页", fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Text(fmt(imgBytes), fontWeight = FontWeight.Bold)
+                    }
+                    HorizontalDivider(Modifier.padding(horizontal = 14.dp))
+                    Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("已下载漫画", fontWeight = FontWeight.Bold)
+                            Text("$dlCount 本（在下载页左滑删除）", fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Text(fmt(dlBytes), fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+            Spacer(Modifier.height(14.dp))
+            Button(
+                onClick = { confirm = true },
+                enabled = imgBytes > 0 && !cleared,
+                colors = ButtonDefaults.buttonColors(containerColor = Pink),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (cleared) "已清理" else "清理图片缓存", color = Color.White)
+            }
+            Spacer(Modifier.height(10.dp))
+            Text("图片缓存清掉不影响收藏与已下载漫画，下次打开会重新下载。",
+                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+
+    if (confirm) {
+        AlertDialog(
+            onDismissRequest = { confirm = false },
+            title = { Text("清理图片缓存？") },
+            text = { Text("将清掉 ${fmt(imgBytes)} 图片缓存，已下载的漫画不受影响。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirm = false
+                    scope.launch {
+                        withContext(Dispatchers.IO) {
+                            runCatching { context.imageLoader.diskCache?.clear() }
+                            runCatching { context.imageLoader.memoryCache?.clear() }
+                        }
+                        cleared = true
+                        reload()
+                    }
+                }) { Text("清理", color = Pink) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirm = false }) { Text("取消") }
+            },
+        )
     }
 }

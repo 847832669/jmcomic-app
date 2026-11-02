@@ -111,6 +111,14 @@ class AccountStore(context: Context) {
         syncApi()
     }
 
+    /** The favorites endpoint reports the live total on every load; fold it
+     *  into the cached stats so the profile strip's count never goes stale
+     *  (exp / level / coin only exist in the login response). */
+    fun syncFavCount(total: Int) {
+        val st = stats ?: return
+        if (total > 0 && st.favCount != total) stats = st.copy(favCount = total)
+    }
+
     fun logout() {
         prefs.edit().clear().apply()
         JmApi.authToken = null; JmApi.authCookie = null

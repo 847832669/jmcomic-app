@@ -72,6 +72,7 @@ data class AuthorDest(val name: String) : Dest
 data class CategoryDest(val slug: String, val name: String) : Dest
 object DownloadsDest : Dest
 object BlockedTagsDest : Dest
+object StorageDest : Dest
 
 class Router {
     val stack = mutableStateListOf<Dest>()

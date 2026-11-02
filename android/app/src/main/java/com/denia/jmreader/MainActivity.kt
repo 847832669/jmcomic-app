@@ -135,6 +135,7 @@ fun JmApp(externalPdf: android.net.Uri? = null, onExternalPdfDone: () -> Unit = 
                         is CategoryDest -> CategoryPage(top, router)
                         DownloadsDest -> DownloadsScreen(router)
                         BlockedTagsDest -> BlockedTagsScreen(router)
+                        StorageDest -> StorageScreen(router)
                     }
                 }
             }
