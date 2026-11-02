@@ -16,7 +16,9 @@ final class JMClient {
     static let shared = JMClient()
 
     private let seed = "185Hcomic3PAPP7R"
-    private var apiHosts = ["www.cdngwc.net", "www.cdnhjk.net"]
+    private let apiHosts = ["www.cdngwc.net", "www.cdnhjk.net"]
+    /// Last host that answered successfully; tried first for serial calls.
+    private var preferredHost: String?
     private var version: String?
     private let session: URLSession
 
@@ -132,40 +134,80 @@ final class JMClient {
 
     private func bootstrapVersion() async {
         if version != nil { return }
-        for host in apiHosts {
-            var comps = URLComponents(string: "https://\(host)/setting")!
-            comps.queryItems = [URLQueryItem(name: "app_img_shunt", value: "1"),
-                                URLQueryItem(name: "lang", value: "TW")]
-            guard let url = comps.url else { continue }
-            var req = URLRequest(url: url)
-            req.setValue(Self.ua, forHTTPHeaderField: "User-Agent")
-            if let (data, _) = try? await session.data(for: req),
-               let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-               let d = obj["data"] as? [String: Any],
-               let v = d["jm3_version"] as? String, !v.isEmpty {
-                version = v
-                return
+        // Race both hosts for /setting too — serial order made a slow first
+        // host tax the very first call of every launch.
+        let found = await withTaskGroup(of: String?.self) { group in
+            for host in apiHosts {
+                group.addTask { await self.fetchVersion(host: host) }
             }
+            var first: String?
+            for await v in group {
+                if first == nil, let v { first = v; group.cancelAll() }
+            }
+            return first
         }
-        version = "2.1.12"
+        version = found ?? "2.1.12"
+    }
+
+    private func fetchVersion(host: String) async -> String? {
+        var comps = URLComponents(string: "https://\(host)/setting")!
+        comps.queryItems = [URLQueryItem(name: "app_img_shunt", value: "1"),
+                            URLQueryItem(name: "lang", value: "TW")]
+        guard let url = comps.url else { return nil }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 8
+        req.setValue(Self.ua, forHTTPHeaderField: "User-Agent")
+        guard let (data, _) = try? await session.data(for: req),
+              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let d = obj["data"] as? [String: Any],
+              let v = d["jm3_version"] as? String, !v.isEmpty else { return nil }
+        return v
     }
 
     private static let ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.7 Mobile/15E148 Safari/604.1"
 
+    private func orderedHosts() -> [String] {
+        guard let preferredHost, apiHosts.contains(preferredHost) else { return apiHosts }
+        return [preferredHost] + apiHosts.filter { $0 != preferredHost }
+    }
+
     private func request(_ path: String, params: [String: String]) async throws -> Any {
         await bootstrapVersion()
-        var lastError: Error = JMError.badResponse
-        for host in apiHosts {
-            do { return try await getOnce(host: host, path: path, params: params) }
-            catch { lastError = error }
+        // Race both API hosts and take the first success. GETs are idempotent,
+        // and the hosts' latency differs wildly by network: serial failover
+        // made every call pay the slow host first (measured on one network:
+        // host A search 0.5s, host B 11–30s). This was the main reason the
+        // search page felt stuck.
+        let hosts = orderedHosts()
+        if hosts.count == 1 { return try await getOnce(host: hosts[0], path: path, params: params) }
+        return try await withThrowingTaskGroup(of: (String, Result<Any, Error>).self) { group in
+            for host in hosts {
+                group.addTask {
+                    do { return (host, .success(try await self.getOnce(host: host, path: path, params: params))) }
+                    catch { return (host, .failure(error)) }
+                }
+            }
+            var lastError: Error = JMError.badResponse
+            for await (host, result) in group {
+                switch result {
+                case .success(let value):
+                    preferredHost = host
+                    group.cancelAll()
+                    return value
+                case .failure(let error):
+                    lastError = error
+                }
+            }
+            throw lastError
         }
-        throw lastError
     }
 
     private func postForm(_ path: String, fields: [String: String]) async throws -> Any {
         await bootstrapVersion()
+        // POSTs are not raced (check-in / favorite must not fire twice);
+        // serial, but the last-good host goes first.
         var lastError: Error = JMError.badResponse
-        for host in apiHosts {
+        for host in orderedHosts() {
             do { return try await postOnce(host: host, path: path, fields: fields) }
             catch { lastError = error }
         }
@@ -180,6 +222,7 @@ final class JMClient {
         items.append(URLQueryItem(name: "lang", value: "TW"))
         comps.queryItems = items
         var req = URLRequest(url: comps.url!)
+        req.timeoutInterval = 12
         req.setValue(token, forHTTPHeaderField: "token")
         req.setValue("\(ts),\(version ?? "2.1.12")", forHTTPHeaderField: "tokenparam")
         req.setValue(Self.ua, forHTTPHeaderField: "User-Agent")

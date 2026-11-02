@@ -470,24 +470,27 @@ final class BlockTagStore: ObservableObject {
         guard !blockedTags.isEmpty else { return }
         let unknown = items.map(\.id).filter { tagCache[$0] == nil && !inFlight.contains($0) }
         guard !unknown.isEmpty else { return }
-        let batch = Array(unknown.prefix(40))
+        let batch = Array(unknown.prefix(24))
         batch.forEach { inFlight.insert($0) }
         Task {
-            for chunkStart in stride(from: 0, to: batch.count, by: 4) {
-                let chunk = Array(batch[chunkStart..<min(chunkStart + 4, batch.count)])
-                let results = await withTaskGroup(of: (String, [String]).self) { group in
+            for chunkStart in stride(from: 0, to: batch.count, by: 3) {
+                let chunk = Array(batch[chunkStart..<min(chunkStart + 3, batch.count)])
+                let results = await withTaskGroup(of: (String, [String]?).self) { group in
                     for id in chunk {
                         group.addTask {
                             let d = try? await JMClient.shared.album(id: id)
-                            return (id, d?.tags ?? [])
+                            return (id, d?.tags)
                         }
                     }
-                    var out: [(String, [String])] = []
+                    var out: [(String, [String]?)] = []
                     for await r in group { out.append(r) }
                     return out
                 }
-                for (id, tags) in results where !tags.isEmpty {
-                    self.remember(albumId: id, tags: tags)
+                // Remember fetched albums even when their tag list is empty —
+                // otherwise tagless albums were re-fetched on every appearance.
+                // Failures (nil) stay uncached and retry another time.
+                for (id, tags) in results {
+                    if let tags { self.remember(albumId: id, tags: tags) }
                 }
             }
             batch.forEach { self.inFlight.remove($0) }

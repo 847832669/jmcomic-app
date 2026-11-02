@@ -21,6 +21,9 @@ final class ImagePipe {
     private let memCache = NSCache<NSString, UIImage>()
     private let session: URLSession
     private let diskDir: URL
+    /// Image hosts in try-order; the last one that served moves to the front
+    /// so a slow first host doesn't tax every cover and page.
+    private var hostOrder = ImagePipe.imageHosts
 
     private init() {
         let cfg = URLSessionConfiguration.default
@@ -57,14 +60,19 @@ final class ImagePipe {
         if let data = try? Data(contentsOf: fileURL), let img = Self.decode(data, targetWidth: targetWidth) {
             raw = img
         } else {
-            for host in Self.imageHosts {
+            for host in hostOrder {
                 guard let url = URL(string: "https://\(host)\(path)") else { continue }
                 var req = URLRequest(url: url)
+                req.timeoutInterval = 15
                 req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
                 if let (data, resp) = try? await session.data(for: req),
                    (resp as? HTTPURLResponse)?.statusCode == 200,
                    let img = Self.decode(data, targetWidth: targetWidth) {
                     try? data.write(to: fileURL)
+                    if host != hostOrder[0] {
+                        hostOrder.removeAll { $0 == host }
+                        hostOrder.insert(host, at: 0)
+                    }
                     raw = img
                     break
                 }
