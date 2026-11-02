@@ -6,6 +6,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -25,16 +26,47 @@ import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+    private var pdfUri by mutableStateOf<android.net.Uri?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { JmApp() }
+        if (savedInstanceState == null && intent?.action == android.content.Intent.ACTION_VIEW) {
+            pdfUri = intent.data
+        }
+        setContent { JmApp(pdfUri) { pdfUri = null } }
     }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        // A launcher (MAIN) entry must clear any stale external-PDF state,
+        // otherwise the app would keep reopening that PDF instead of its own UI.
+        pdfUri = if (intent.action == android.content.Intent.ACTION_VIEW) intent.data else null
+    }
+}
+
+/** Copies a PDF handed to us by the system (e.g. tapped in the Files app) to a local
+ *  file, then hands it to the viewer via [onReady]; the Uri itself is consumed at once. */
+@Composable
+fun ExternalPdfOpener(uri: android.net.Uri, onReady: (java.io.File) -> Unit, onFail: () -> Unit) {
+    val context = LocalContext.current
+    LaunchedEffect(uri) {
+        val dest = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching {
+                val out = java.io.File(context.cacheDir, "opened-external.pdf")
+                val input = context.contentResolver.openInputStream(uri) ?: error("no stream")
+                input.use { inp -> out.outputStream().use { o -> inp.copyTo(o) } }
+                out
+            }.getOrNull()
+        }
+        if (dest != null) onReady(dest) else onFail()
+    }
+    Box(Modifier.fillMaxSize())
 }
 
 // Display order: 首页 / 分类 / 个人 / 搜索 (same as the iOS app)
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun JmApp() {
+fun JmApp(externalPdf: android.net.Uri? = null, onExternalPdfDone: () -> Unit = {}) {
     val context = LocalContext.current
     val account = remember { AccountStore(context).apply { syncApi() } }
     val library = remember { LibraryStore(context) }
@@ -49,7 +81,18 @@ fun JmApp() {
         scope.launch { pagerState.animateScrollToPage(0) }
     }
 
+    var viewingExternal by remember { mutableStateOf<java.io.File?>(null) }
     JmTheme {
+        if (viewingExternal != null) {
+            PdfViewerScreen(viewingExternal!!) { viewingExternal = null }
+            return@JmTheme
+        }
+        if (externalPdf != null) {
+            ExternalPdfOpener(externalPdf,
+                onReady = { f -> viewingExternal = f; onExternalPdfDone() },
+                onFail = { onExternalPdfDone() })
+            return@JmTheme
+        }
         Scaffold(
             bottomBar = {
                 if (router.stack.isEmpty()) {

@@ -144,19 +144,16 @@ object DownloadManager {
                 put(MediaStore.Downloads.DISPLAY_NAME, file.name)
                 put(MediaStore.Downloads.MIME_TYPE, "application/pdf")
                 put(MediaStore.Downloads.RELATIVE_PATH, "Download/JMReader")
-                put(MediaStore.Downloads.IS_PENDING, 1)
             }
             val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return
-            val ok = resolver.openOutputStream(uri)?.use { out ->
-                file.inputStream().use { it.copyTo(out) }; true
-            } ?: false
-            if (ok) {
-                values.clear()
-                values.put(MediaStore.Downloads.IS_PENDING, 0)
-                resolver.update(uri, values, null, null)
-            } else {
-                resolver.delete(uri, null, null)
-            }
+            var ok = false
+            try {
+                resolver.openOutputStream(uri)?.use { out ->
+                    file.inputStream().use { it.copyTo(out) }
+                }
+                ok = true
+            } catch (e: Exception) { /* fall through to cleanup */ }
+            if (!ok) runCatching { resolver.delete(uri, null, null) }
         } catch (e: Exception) { /* export is best-effort; the in-app copy is authoritative */ }
     }
 
