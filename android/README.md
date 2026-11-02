@@ -4,7 +4,7 @@ JM Reader 的 Android 版本（Kotlin + Jetpack Compose），与 iOS 版同一�
 
 ## 安装
 
-在仓库的 [Releases](https://github.com/denia-dev/jmcomic-app/releases) 中下载「JM Reader Android」的 APK 直接安装（调试签名），系统要求 Android 8.0（API 26）及以上。
+在仓库的 [Releases](https://github.com/denia-dev/jmcomic-app/releases) 最新版发布中下载 APK 附件（`JMReader-Android-v….apk`）直接安装（调试签名），系统要求 Android 8.0（API 26）及以上。
 
 ## 功能
 

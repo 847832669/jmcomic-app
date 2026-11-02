@@ -33,13 +33,13 @@
 
 ### Android
 
-在 [Releases](https://github.com/denia-dev/jmcomic-app/releases) 下载「JM Reader Android」的 APK 直接安装（调试签名），系统要求 Android 8.0 及以上。
+在 [Releases](https://github.com/denia-dev/jmcomic-app/releases) 最新版发布中下载 APK 附件（`JMReader-Android-v….apk`）直接安装（调试签名），系统要求 Android 8.0 及以上。
 
 > ⚠️ **未验证**：Android 版仅完成编译构建，尚未在真机上运行测试。欢迎试用，并到 [Issues](https://github.com/denia-dev/jmcomic-app/issues) 反馈运行情况（机型 / 系统版本 / 遇到的问题）。
 
 ## 从源码构建
 
-- **iOS**：使用 Xcode 打开 `JMReader.xcodeproj`；仓库的 GitHub Actions 会在提交后自动构建未签名 IPA 并发布到 Releases
+- **iOS**：使用 Xcode 打开 `JMReader.xcodeproj`；仓库的 GitHub Actions 会在提交后自动构建未签名 IPA 并生成草稿发布，三端附件齐备后转为正式发布
 - **Android**：见 [android/README.md](android/README.md)
 
 ## 版本历史
