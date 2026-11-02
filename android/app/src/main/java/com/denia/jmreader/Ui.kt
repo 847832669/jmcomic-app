@@ -8,6 +8,7 @@ import android.os.Build
 import android.provider.MediaStore
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -57,11 +58,25 @@ fun JmTheme(content: @Composable () -> Unit) {
     val scheme = if (dark) darkColorScheme(
         primary = Pink, secondary = Blue,
         background = Color(0xFF0E0E12), surface = Color(0xFF17171D), surfaceVariant = Color(0xFF22222A),
+        outlineVariant = Color(0xFF2A2A33),
     ) else lightColorScheme(
         primary = Pink, secondary = Blue,
-        background = Color(0xFFF7F7FA), surface = Color.White, surfaceVariant = Color(0xFFECECF1),
+        background = Color(0xFFF2F2F7), surface = Color.White, surfaceVariant = Color(0xFFEFEFF4),
+        outlineVariant = Color(0xFFE2E2E8),
     )
     MaterialTheme(colorScheme = scheme, content = content)
+}
+
+/** iOS-style glass card: surface fill, hairline border, large radius. */
+@Composable
+fun IosCard(modifier: Modifier = Modifier, radius: androidx.compose.ui.unit.Dp = 20.dp,
+            onClick: (() -> Unit)? = null, content: @Composable () -> Unit) {
+    androidx.compose.material3.Surface(
+        shape = RoundedCornerShape(radius),
+        color = MaterialTheme.colorScheme.surface,
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = if (onClick != null) modifier.clickable { onClick() } else modifier,
+    ) { content() }
 }
 
 // ---------- navigation ----------
@@ -89,7 +104,7 @@ fun CoverImage(id: String, modifier: Modifier = Modifier) {
         contentScale = ContentScale.Crop,
         modifier = modifier
             .aspectRatio(3f / 4f)
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(10.dp))
     )
 }
 

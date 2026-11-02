@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import kotlinx.coroutines.delay
@@ -92,7 +93,7 @@ fun PagedGrid(loader: suspend (Int) -> List<JmApi.Album>, router: Router, key: A
         loading && items.isEmpty() -> LoadingBox()
         error != null && items.isEmpty() -> ErrorText(error!!) { error = null; scope.launch { load(1) } }
         else -> LazyVerticalGrid(GridCells.Fixed(3), state = gridState,
-            contentPadding = PaddingValues(12.dp),
+            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 100.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
             items(shown, key = { it.id }) { AlbumCard(it, router) }
@@ -107,7 +108,7 @@ fun PagedGrid(loader: suspend (Int) -> List<JmApi.Album>, router: Router, key: A
 private data class Channel(val name: String, val slug: String?) // slug null: 推荐 / latest / random
 
 @Composable
-fun HomeScreen(router: Router, goProfile: () -> Unit) {
+fun HomeScreen(router: Router, goProfile: () -> Unit, goSearch: () -> Unit = {}) {
     var categories by remember { mutableStateOf<List<JmApi.Category>>(emptyList()) }
     LaunchedEffect(Unit) { try { categories = JmApi.categories() } catch (e: Exception) {} }
     val channels = remember(categories) {
@@ -118,15 +119,29 @@ fun HomeScreen(router: Router, goProfile: () -> Unit) {
     val running = DownloadManager.tasks.any { it.state == DownloadManager.State.RUNNING }
 
     Column(Modifier.fillMaxSize()) {
+        // iOS-style header: avatar | glass search capsule | glass download circle
         Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             Image(painterResource(R.drawable.avatar), contentDescription = null,
-                modifier = Modifier.size(38.dp).clip(CircleShape).clickable { goProfile() })
+                modifier = Modifier.size(40.dp).clip(CircleShape).clickable { goProfile() })
             Spacer(Modifier.width(10.dp))
-            Text("JM Reader", fontSize = 19.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.weight(1f))
+            Surface(shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.surface,
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                modifier = Modifier.weight(1f).clickable { goSearch() }) {
+                Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Search, contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(17.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("搜索", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            Spacer(Modifier.width(10.dp))
             Box {
-                IconButton(onClick = { router.push(DownloadsDest) }) {
-                    Icon(Icons.Default.Download, contentDescription = "下载")
+                Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surface,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    modifier = Modifier.size(40.dp).clickable { router.push(DownloadsDest) }) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(Icons.Default.Download, contentDescription = "下载", modifier = Modifier.size(19.dp))
+                    }
                 }
                 if (running) {
                     Box(Modifier.size(9.dp).clip(CircleShape)
@@ -153,7 +168,8 @@ fun ScrollableChannelRow(names: List<String>, selected: Int, onSelect: (Int) -> 
             val sel = i == selected
             Surface(
                 shape = RoundedCornerShape(50),
-                color = if (sel) Pink else MaterialTheme.colorScheme.surfaceVariant,
+                color = if (sel) Pink else MaterialTheme.colorScheme.surface,
+                border = if (sel) null else androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                 modifier = Modifier.clickable { onSelect(i) }
             ) {
                 Text(names[i], fontSize = 13.sp,
@@ -185,7 +201,7 @@ fun RecommendContent(router: Router) {
     when {
         sections == null && error == null -> LoadingBox()
         error != null -> ErrorText(error!!) { error = null; sections = null; reload++ }
-        else -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(vertical = 10.dp)) {
+        else -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(top = 10.dp, bottom = 100.dp)) {
             sections?.forEach { (title, albums) ->
                 val shownAlbums = BlockTags.visible(albums)
                 if (shownAlbums.isNotEmpty()) {
@@ -227,6 +243,12 @@ fun SearchScreen(router: Router, history: HistoryStore) {
             placeholder = { Text("搜索标题 / 作者") },
             singleLine = true,
             shape = RoundedCornerShape(50),
+            colors = OutlinedTextFieldDefaults.colors(
+                unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                focusedContainerColor = MaterialTheme.colorScheme.surface,
+                unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
+                focusedBorderColor = Pink,
+            ),
             modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp),
             trailingIcon = {
                 TextButton(onClick = {
@@ -245,7 +267,8 @@ fun SearchScreen(router: Router, history: HistoryStore) {
                 }
                 LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(queries) { q ->
-                        Surface(shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.surfaceVariant,
+                        Surface(shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.surface,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                             modifier = Modifier.clickable { query = q; submitted = q }) {
                             Text(q, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp))
                         }
@@ -270,7 +293,8 @@ fun CategoriesScreen(router: Router) {
     when {
         cats == null && error == null -> LoadingBox()
         error != null -> ErrorText(error!!)
-        else -> androidx.compose.foundation.lazy.LazyColumn(Modifier.fillMaxSize()) {
+        else -> androidx.compose.foundation.lazy.LazyColumn(Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 100.dp)) {
             items(cats!!.filter { it.slug.isNotEmpty() }, key = { it.slug }) { c ->
                 Row(Modifier.fillMaxWidth().clickable { router.push(CategoryDest(c.slug, c.name)) }
                     .padding(horizontal = 16.dp, vertical = 15.dp), verticalAlignment = Alignment.CenterVertically) {

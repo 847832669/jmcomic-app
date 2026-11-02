@@ -1,6 +1,8 @@
 package com.denia.jmreader
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
@@ -8,14 +10,17 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -46,7 +51,8 @@ fun ProfileScreen(router: Router, account: AccountStore, library: LibraryStore) 
         }
     }
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+        .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 100.dp)) {
         if (!loggedIn) {
             Text("登录 JM 账号", fontSize = 18.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(12.dp))
@@ -75,36 +81,48 @@ fun ProfileScreen(router: Router, account: AccountStore, library: LibraryStore) 
             Text("未登录时收藏保存在本机，登录后可同步云端收藏。", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         } else {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(account.username ?: "", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                Image(painterResource(R.drawable.avatar), contentDescription = null,
+                    modifier = Modifier.size(50.dp).clip(CircleShape))
+                Spacer(Modifier.width(12.dp))
+                Column {
+                    Text(account.username ?: "", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Text("已登录", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 Spacer(Modifier.weight(1f))
                 TextButton(onClick = { account.logout(); stats = null; loggedIn = false }) { Text("退出", color = Pink) }
             }
             stats?.let { st ->
-                Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceVariant,
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
-                    Column(Modifier.padding(14.dp)) {
-                        Row {
-                            Text("LV.${st.level}", fontWeight = FontWeight.Bold, color = Pink)
+                IosCard(modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp), radius = 20.dp) {
+                    Column(Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("LV ${st.level}", fontWeight = FontWeight.Bold, color = Pink, fontSize = 16.sp)
                             Spacer(Modifier.width(12.dp))
-                            Text("经验 ${st.exp} / ${st.nextLevelExp}", fontSize = 12.sp)
-                            Spacer(Modifier.weight(1f))
-                            Text("J Coins ${st.coin}", fontSize = 12.sp)
+                            Box(Modifier.weight(1f).height(8.dp).clip(RoundedCornerShape(4.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant)) {
+                                val frac = if (st.nextLevelExp > 0) (st.exp.toFloat() / st.nextLevelExp).coerceIn(0f, 1f) else 0f
+                                Box(Modifier.fillMaxWidth(frac).fillMaxHeight().clip(RoundedCornerShape(4.dp)).background(Pink))
+                            }
+                            Spacer(Modifier.width(12.dp))
+                            Text("${st.exp}/${st.nextLevelExp}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        Spacer(Modifier.height(6.dp))
-                        LinearProgressIndicator(
-                            progress = { if (st.nextLevelExp > 0) (st.exp.toFloat() / st.nextLevelExp).coerceIn(0f, 1f) else 0f },
-                            color = Pink, modifier = Modifier.fillMaxWidth())
-                        Text("可收藏 ${st.favCount} / ${st.favMax}", fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
+                        Spacer(Modifier.height(14.dp))
+                        Row {
+                            listOf("经验值" to "${st.exp}", "J Coins" to "${st.coin}", "可收藏数量" to "${st.favCount}/${st.favMax}").forEach { (lb, v) ->
+                                Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text(lb, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(v, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Pink,
+                                        modifier = Modifier.padding(top = 2.dp))
+                                }
+                            }
+                        }
                     }
                 }
             }
             if (stats == null) {
                 // exp / level / coin only arrive with the login response; a
                 // session kept alive across updates may have none cached.
-                Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceVariant,
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
-                    Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                IosCard(modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp), radius = 20.dp) {
+                    Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text("账号数据未同步", fontWeight = FontWeight.Bold)
                             Text("经验、等级、金币在登录时同步，重新登录一次即可显示",
@@ -120,10 +138,10 @@ fun ProfileScreen(router: Router, account: AccountStore, library: LibraryStore) 
         }
 
         Spacer(Modifier.height(14.dp))
-        Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceVariant,
-            modifier = Modifier.fillMaxWidth().clickable { router.push(BlockedTagsDest) }) {
-            Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("屏蔽标签", fontWeight = FontWeight.Bold)
+        IosCard(radius = 16.dp, onClick = { router.push(BlockedTagsDest) },
+            modifier = Modifier.fillMaxWidth()) {
+            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("屏蔽标签", fontSize = 16.sp)
                 Spacer(Modifier.weight(1f))
                 if (BlockTags.blockedTags.isNotEmpty()) {
                     Text("${BlockTags.blockedTags.size} 个", fontSize = 12.sp,
@@ -134,10 +152,10 @@ fun ProfileScreen(router: Router, account: AccountStore, library: LibraryStore) 
         }
 
         Spacer(Modifier.height(10.dp))
-        Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceVariant,
-            modifier = Modifier.fillMaxWidth().clickable { router.push(StorageDest) }) {
-            Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("存储空间", fontWeight = FontWeight.Bold)
+        IosCard(radius = 16.dp, onClick = { router.push(StorageDest) },
+            modifier = Modifier.fillMaxWidth()) {
+            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("存储空间", fontSize = 16.sp)
                 Spacer(Modifier.weight(1f))
                 storageBytes?.let {
                     Text(android.text.format.Formatter.formatFileSize(context, it), fontSize = 12.sp,
@@ -181,9 +199,8 @@ fun CheckinCard(account: AccountStore) {
             }
         }
     }
-    Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceVariant,
-        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-        Column(Modifier.padding(14.dp)) {
+    IosCard(radius = 18.dp, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("每日签到", fontWeight = FontWeight.Bold)
                 Spacer(Modifier.width(8.dp))
@@ -276,13 +293,22 @@ fun FavoritesSection(router: Router, account: AccountStore, library: LibraryStor
         Text("我的收藏", fontWeight = FontWeight.Bold, fontSize = 16.sp)
         Spacer(Modifier.width(12.dp))
         if (loggedIn) {
-            FilterChip(selected = tab == 0, onClick = { tab = 0 }, label = { Text("云端 $cloudTotal") })
+            FilterChip(selected = tab == 0, onClick = { tab = 0 }, label = { Text("云端 $cloudTotal") },
+                colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Pink, selectedLabelColor = Color.White))
             Spacer(Modifier.width(6.dp))
         }
-        FilterChip(selected = tab == 1, onClick = { tab = 1 }, label = { Text("本地 ${local.size}") })
+        FilterChip(selected = tab == 1, onClick = { tab = 1 }, label = { Text("本地 ${local.size}") },
+            colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Pink, selectedLabelColor = Color.White))
     }
     OutlinedTextField(query, { query = it }, placeholder = { Text("搜收藏（标题/作者）") }, singleLine = true,
-        shape = RoundedCornerShape(50), modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp))
+        shape = RoundedCornerShape(50),
+        colors = OutlinedTextFieldDefaults.colors(
+            unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+            focusedContainerColor = MaterialTheme.colorScheme.surface,
+            unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
+            focusedBorderColor = Pink,
+        ),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp))
     val source = if (tab == 0 && loggedIn) cloud else local
     val filtered = if (query.isBlank()) source else source.filter {
         it.name.contains(query, true) || it.author.contains(query, true)
@@ -353,7 +379,8 @@ fun DetailScreen(dest: DetailDest, router: Router, account: AccountStore, librar
                         Text("作者", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             authors.forEach { au ->
-                                Surface(shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.surfaceVariant,
+                                Surface(shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.surface,
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                                     modifier = Modifier.clickable { router.push(AuthorDest(au)) }) {
                                     Text(au, fontSize = 13.sp, color = Pink, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp))
                                 }
@@ -374,6 +401,7 @@ fun DetailScreen(dest: DetailDest, router: Router, account: AccountStore, librar
                     Spacer(Modifier.height(16.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Button(onClick = { if (chapters.isNotEmpty()) router.push(ReaderDest(chapters.first().first, name)) },
+                            shape = RoundedCornerShape(14.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = Pink)) { Text("开始阅读", color = Color.White) }
                         OutlinedButton(onClick = {
                             if (fav) { library.removeFavorite(dest.id); fav = false; toast = "已取消本地收藏" }
@@ -382,22 +410,30 @@ fun DetailScreen(dest: DetailDest, router: Router, account: AccountStore, librar
                                 if (account.isLoggedIn) scope.launch { try { JmApi.addFavorite(dest.id) } catch (e: Exception) {} }
                                 toast = "已收藏"
                             }
-                        }) { Text(if (fav) "已收藏" else "收藏", color = Pink) }
-                        OutlinedButton(onClick = { DownloadManager.enqueue(context, albumModel); toast = "已加入下载，去下载页看进度" }) {
+                        }, shape = RoundedCornerShape(14.dp)) { Text(if (fav) "已收藏" else "收藏", color = Pink) }
+                        OutlinedButton(onClick = { DownloadManager.enqueue(context, albumModel); toast = "已加入下载，去下载页看进度" },
+                            shape = RoundedCornerShape(14.dp)) {
                             Text("下载", color = Pink)
                         }
                     }
                     toast?.let { Text(it, color = Pink, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp)) }
                     Spacer(Modifier.height(18.dp))
                     Text("章节", fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                    chapters.forEach { (cid, cname) ->
-                        Row(Modifier.fillMaxWidth().clickable { router.push(ReaderDest(cid, name)) }
-                            .padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text(cname.ifEmpty { "第 1 话" }, fontSize = 14.sp)
-                            Spacer(Modifier.weight(1f))
-                            Text("›", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(8.dp))
+                    IosCard(radius = 18.dp, modifier = Modifier.fillMaxWidth()) {
+                        Column {
+                            chapters.forEachIndexed { idx, (cid, cname) ->
+                                Row(Modifier.fillMaxWidth().clickable { router.push(ReaderDest(cid, name)) }
+                                    .padding(horizontal = 16.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Text(cname.ifEmpty { "第 1 话" }, fontSize = 14.sp)
+                                    Spacer(Modifier.weight(1f))
+                                    Text("›", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                if (idx < chapters.lastIndex) {
+                                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), thickness = 0.5.dp)
+                                }
+                            }
                         }
-                        HorizontalDivider(thickness = 0.5.dp)
                     }
                 }
             }
@@ -417,7 +453,8 @@ private fun FlowRowTags(tags: List<String>, onLongPress: (String) -> Unit = {}) 
         rows.forEach { r ->
             Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 r.forEach { tag ->
-                    Surface(shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.surfaceVariant,
+                    Surface(shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.surface,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                         modifier = Modifier.combinedClickable(onClick = {}, onLongClick = { onLongPress(tag) })) {
                         Text(tag, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp))
                     }
@@ -572,16 +609,14 @@ fun StorageScreen(router: Router) {
     Column(Modifier.fillMaxSize()) {
         TopBar(title = "存储空间") { router.pop() }
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
-            Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceVariant,
-                modifier = Modifier.fillMaxWidth()) {
+            IosCard(radius = 20.dp, modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(vertical = 18.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("总占用", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(fmt(imgBytes + dlBytes), fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Pink)
                 }
             }
             Spacer(Modifier.height(14.dp))
-            Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceVariant,
-                modifier = Modifier.fillMaxWidth()) {
+            IosCard(radius = 20.dp, modifier = Modifier.fillMaxWidth()) {
                 Column {
                     Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
@@ -606,6 +641,7 @@ fun StorageScreen(router: Router) {
             Button(
                 onClick = { confirm = true },
                 enabled = imgBytes > 0 && !cleared,
+                shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Pink),
                 modifier = Modifier.fillMaxWidth(),
             ) {
