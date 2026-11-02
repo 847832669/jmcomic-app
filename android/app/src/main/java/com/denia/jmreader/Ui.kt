@@ -171,19 +171,27 @@ object DownloadManager {
             try {
                 val detail = JmApi.album(album.id)
                 val chapters = parseSeries(detail, album.id)
+                val chapterImages: List<List<String>> = coroutineScope {
+                    chapters.map { (cid, _) ->
+                        async {
+                            val ch = JmApi.chapter(cid)
+                            val imgs = ch.optJSONArray("images")
+                            (0 until (imgs?.length() ?: 0)).map { imgs!!.optString(it) }
+                        }
+                    }.awaitAll()
+                }
                 val pages = mutableListOf<Pair<String, String>>()
-                for ((cid, _) in chapters) {
-                    val ch = JmApi.chapter(cid)
-                    val imgs = ch.optJSONArray("images")
-                    for (i in 0 until (imgs?.length() ?: 0)) pages.add(cid to imgs!!.optString(i))
+                chapters.zip(chapterImages).forEach { (ref, files) ->
+                    files.forEach { pages.add(ref.first to it) }
                 }
                 val stage = stagingDir(appCtx, album.id)
                 val counter = AtomicInteger(pages.indices.count { pageFile(stage, it).let { f -> f.exists() && f.length() > 0 } })
                 withContext(Dispatchers.Main) { task.total = pages.size; task.done = counter.get() }
-                // Stage 1: fetch + descramble each page to a JPEG on disk (4-way parallel,
-                // 3 attempts per page). Pages already on disk are skipped, so a failed or
-                // killed download resumes where it stopped instead of starting over.
-                val sem = Semaphore(4)
+                // Stage 1: fetch + descramble each page to a JPEG on disk (8-way parallel,
+                // 3 attempts per page with a short backoff). Pages already on disk are
+                // skipped, so a failed or killed download resumes where it stopped
+                // instead of starting over.
+                val sem = Semaphore(8)
                 coroutineScope {
                     pages.mapIndexed { idx, (cid, f) ->
                         async {
@@ -201,7 +209,10 @@ object DownloadManager {
                                         out.outputStream().buffered().use { bmp.compress(Bitmap.CompressFormat.JPEG, 88, it) }
                                         if (!bmp.isRecycled) bmp.recycle()
                                         ok = true
-                                    } catch (e: Exception) { lastErr = e }
+                                    } catch (e: Exception) {
+                                        lastErr = e
+                                        if (!ok && attempt < 3) kotlinx.coroutines.delay(300L * attempt)
+                                    }
                                 }
                                 if (!ok) throw lastErr ?: IllegalStateException("page failed")
                             }
