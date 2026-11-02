@@ -63,36 +63,3 @@ extension View {
         )
     }
 }
-
-
-/// Swipe left/right anywhere on a tab root to move between tabs.
-/// Direction follows the tab's side (his spec): swipe right -> the tab on the
-/// right, swipe left -> the tab on the left. Display order: 首页/分类/个人/搜索.
-/// Strict thresholds so horizontal shelf scrollers on Home don't trigger it.
-struct TabSwipeModifier: ViewModifier {
-    @ObservedObject var appState: AppState
-
-    func body(content: Content) -> some View {
-        content.simultaneousGesture(
-            DragGesture(minimumDistance: 40)
-                .onEnded { v in
-                    let w = v.translation.width
-                    let h = v.translation.height
-                    guard abs(w) > 120, abs(w) > 2.5 * abs(h) else { return }
-                    let order = [0, 2, 3, 1]
-                    guard let i = order.firstIndex(of: appState.selectedTab) else { return }
-                    let next = w > 0 ? i + 1 : i - 1
-                    guard order.indices.contains(next) else { return }
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        appState.selectedTab = order[next]
-                    }
-                }
-        )
-    }
-}
-
-extension View {
-    func tabSwipe(_ appState: AppState) -> some View {
-        modifier(TabSwipeModifier(appState: appState))
-    }
-}
