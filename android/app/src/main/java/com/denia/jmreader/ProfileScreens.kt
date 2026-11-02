@@ -1,6 +1,8 @@
 package com.denia.jmreader
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -85,6 +87,20 @@ fun ProfileScreen(router: Router, account: AccountStore, library: LibraryStore) 
                 }
             }
             CheckinCard(account)
+        }
+
+        Spacer(Modifier.height(14.dp))
+        Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceVariant,
+            modifier = Modifier.fillMaxWidth().clickable { router.push(BlockedTagsDest) }) {
+            Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("屏蔽标签", fontWeight = FontWeight.Bold)
+                Spacer(Modifier.weight(1f))
+                if (BlockTags.blockedTags.isNotEmpty()) {
+                    Text("${BlockTags.blockedTags.size} 个", fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Text(" ›", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
 
         Spacer(Modifier.height(18.dp))
@@ -248,7 +264,14 @@ fun DetailScreen(dest: DetailDest, router: Router, account: AccountStore, librar
     var toast by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(dest.id) {
-        try { detail = JmApi.album(dest.id) } catch (e: Exception) { error = e.message }
+        try {
+            val dd = JmApi.album(dest.id)
+            detail = dd
+            val t = dd.optJSONArray("tags")
+            val tl = mutableListOf<String>()
+            if (t != null) for (i in 0 until t.length()) tl.add(t.optString(i))
+            BlockTags.remember(dest.id, tl)
+        } catch (e: Exception) { error = e.message }
         fav = library.isFavorite(dest.id)
     }
     Column(Modifier.fillMaxSize()) {
@@ -295,7 +318,7 @@ fun DetailScreen(dest: DetailDest, router: Router, account: AccountStore, librar
                         Spacer(Modifier.height(12.dp))
                         Text("标签", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         val shown = if (tagsExpanded) tags else tags.take(8)
-                        FlowRowTags(shown)
+                        FlowRowTags(shown) { tag -> BlockTags.add(tag); toast = "已屏蔽标签「$tag」，列表里将不再显示" }
                         if (tags.size > 8) {
                             TextButton(onClick = { tagsExpanded = !tagsExpanded }) {
                                 Text(if (tagsExpanded) "收起" else "展开全部 ${tags.size} 个", color = Pink, fontSize = 12.sp)
@@ -336,8 +359,9 @@ fun DetailScreen(dest: DetailDest, router: Router, account: AccountStore, librar
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun FlowRowTags(tags: List<String>) {
+private fun FlowRowTags(tags: List<String>, onLongPress: (String) -> Unit = {}) {
     var x = 0f
     Column {
         var row = mutableListOf<String>()
@@ -347,7 +371,8 @@ private fun FlowRowTags(tags: List<String>) {
         rows.forEach { r ->
             Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 r.forEach { tag ->
-                    Surface(shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.surfaceVariant) {
+                    Surface(shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier.combinedClickable(onClick = {}, onLongClick = { onLongPress(tag) })) {
                         Text(tag, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp))
                     }
                 }
@@ -423,6 +448,43 @@ fun DownloadsScreen(router: Router) {
                 }
                 HorizontalDivider(thickness = 0.5.dp)
             }
+        }
+    }
+}
+
+// ---------------- Blocked tags ----------------
+@Composable
+fun BlockedTagsScreen(router: Router) {
+    var input by remember { mutableStateOf("") }
+    Column(Modifier.fillMaxSize()) {
+        TopBar(title = "屏蔽标签") { router.pop() }
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(input, { input = it }, placeholder = { Text("输入要屏蔽的标签") },
+                    singleLine = true, modifier = Modifier.weight(1f))
+                Spacer(Modifier.width(8.dp))
+                Button(onClick = { BlockTags.add(input); input = "" }, enabled = input.isNotBlank(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Pink)) {
+                    Text("添加", color = Color.White)
+                }
+            }
+            Spacer(Modifier.height(14.dp))
+            if (BlockTags.blockedTags.isEmpty()) {
+                Text("还没有屏蔽任何标签。在漫画详情页长按标签也可以快速屏蔽。",
+                    fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                BlockTags.blockedTags.forEach { tag ->
+                    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(tag, fontSize = 14.sp)
+                        Spacer(Modifier.weight(1f))
+                        TextButton(onClick = { BlockTags.remove(tag) }) { Text("取消屏蔽", color = Pink, fontSize = 12.sp) }
+                    }
+                    HorizontalDivider(thickness = 0.5.dp)
+                }
+            }
+            Spacer(Modifier.height(14.dp))
+            Text("在首页、分类、搜索等列表中，标题或作者含屏蔽词的作品会直接隐藏；作品的真实标签会随着浏览自动记录，之后按标签过滤。收藏与历史不受影响。",
+                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

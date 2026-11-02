@@ -18,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -53,20 +54,36 @@ fun PagedGrid(loader: suspend (Int) -> List<JmApi.Album>, router: Router, key: A
     suspend fun load(next: Int) {
         loading = true
         try {
-            val got = loader(next)
-            items = if (next == 1) got else items + got
+            // Page 1 used to fail silently/vanish on a transient API error
+            // (e.g. the search page's recommendations) — retry it twice.
+            var got: List<JmApi.Album>? = null
+            var lastErr: Exception? = null
+            val attempts = if (next == 1) 3 else 1
+            for (a in 1..attempts) {
+                try { got = loader(next); break }
+                catch (e: Exception) { lastErr = e; if (a < attempts) delay(1500L * a) }
+            }
+            val result = got ?: throw (lastErr ?: Exception("加载失败"))
+            items = if (next == 1) result else items + result
             page = next
-            if (got.isEmpty()) hasMore = false
+            if (result.isEmpty()) hasMore = false
         } catch (e: Exception) { error = e.message }
         loading = false
     }
     val scope = rememberCoroutineScope()
+    val tagRev = BlockTags.revision
+    val shown = remember(items, tagRev) { BlockTags.visible(items) }
     LaunchedEffect(key) { load(1) }
+    LaunchedEffect(items) { BlockTags.prefetch(scope, items) }
+    LaunchedEffect(shown.size, items.size) {
+        // A whole page filtered away: keep paging so the grid can fill.
+        if (shown.isEmpty() && items.isNotEmpty() && hasMore && !loading) load(page + 1)
+    }
     val shouldLoadMore by remember {
         derivedStateOf {
             val info = gridState.layoutInfo
             val last = info.visibleItemsInfo.lastOrNull()?.index ?: 0
-            hasMore && !loading && items.isNotEmpty() && last >= items.size - 6
+            hasMore && !loading && shown.isNotEmpty() && last >= shown.size - 6
         }
     }
     LaunchedEffect(shouldLoadMore) { if (shouldLoadMore) load(page + 1) }
@@ -78,7 +95,7 @@ fun PagedGrid(loader: suspend (Int) -> List<JmApi.Album>, router: Router, key: A
             contentPadding = PaddingValues(12.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            items(items, key = { it.id }) { AlbumCard(it, router) }
+            items(shown, key = { it.id }) { AlbumCard(it, router) }
             if (loading) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(3) }) {
                 Box(Modifier.fillMaxWidth().padding(12.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Pink) }
             }
@@ -149,6 +166,8 @@ fun ScrollableChannelRow(names: List<String>, selected: Int, onSelect: (Int) -> 
 
 @Composable
 fun RecommendContent(router: Router) {
+    val scope = rememberCoroutineScope()
+    val tagRev = BlockTags.revision
     var sections by remember { mutableStateOf<List<Pair<String, List<JmApi.Album>>>?>(null) }
     var randoms by remember { mutableStateOf<List<JmApi.Album>>(emptyList()) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -159,22 +178,30 @@ fun RecommendContent(router: Router) {
             randoms = JmApi.randomRecommend()
         } catch (e: Exception) { error = e.message }
     }
+    LaunchedEffect(sections, randoms) {
+        sections?.forEach { BlockTags.prefetch(scope, it.second) }
+        BlockTags.prefetch(scope, randoms)
+    }
     when {
         sections == null && error == null -> LoadingBox()
         error != null -> ErrorText(error!!) { error = null; sections = null; reload++ }
         else -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(vertical = 10.dp)) {
             sections?.forEach { (title, albums) ->
-                Text(title, fontSize = 16.sp, fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp))
-                LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    items(albums, key = { it.id }) { AlbumCard(it, router, Modifier.width(108.dp)) }
+                val shownAlbums = BlockTags.visible(albums)
+                if (shownAlbums.isNotEmpty()) {
+                    Text(title, fontSize = 16.sp, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp))
+                    LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        items(shownAlbums, key = { it.id }) { AlbumCard(it, router, Modifier.width(108.dp)) }
+                    }
                 }
             }
-            if (randoms.isNotEmpty()) {
+            val shownRandoms = BlockTags.visible(randoms)
+            if (shownRandoms.isNotEmpty()) {
                 Text("随机推荐", fontSize = 16.sp, fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp))
                 Column(Modifier.padding(horizontal = 12.dp)) {
-                    randoms.chunked(3).forEach { row ->
+                    shownRandoms.chunked(3).forEach { row ->
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             row.forEach { AlbumCard(it, router, Modifier.weight(1f)) }
                             repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }

@@ -2,6 +2,14 @@ package com.denia.jmreader
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -127,4 +135,98 @@ class HistoryStore(context: Context) {
         prefs.edit().putString("queries", arr.toString()).apply()
     }
     fun clear() { prefs.edit().remove("queries").apply() }
+}
+
+/** Custom tag blocklist (mirrors the iOS BlockTagStore). Browse surfaces hide
+ * albums whose title/author contains a blocked word, or — once their real
+ * tags are known — whose detail tags contain a blocked tag. List endpoints
+ * return no tags, so tags are learned from detail fetches (opening a detail
+ * page, plus background prefetch from lists) and cached in SharedPreferences.
+ * Favorites and history are never filtered. */
+object BlockTags {
+    private var prefs: SharedPreferences? = null
+    var blockedTags by mutableStateOf<List<String>>(emptyList())
+        private set
+    var revision by mutableIntStateOf(0)
+        private set
+    private val tagCache = mutableMapOf<String, List<String>>()
+    private val inFlight = mutableSetOf<String>()
+    private val sem = Semaphore(4)
+
+    fun init(context: Context) {
+        if (prefs != null) return
+        val p = context.getSharedPreferences("jm.blocktags", Context.MODE_PRIVATE)
+        prefs = p
+        val arr = try { JSONArray(p.getString("list", "[]") ?: "[]") } catch (e: Exception) { JSONArray() }
+        blockedTags = (0 until arr.length()).map { arr.optString(it) }.filter { it.isNotEmpty() }
+        val obj = try { JSONObject(p.getString("cache", "{}") ?: "{}") } catch (e: Exception) { JSONObject() }
+        val keys = obj.keys()
+        while (keys.hasNext()) {
+            val k = keys.next()
+            val a = obj.optJSONArray(k)
+            tagCache[k] = if (a == null) emptyList() else (0 until a.length()).map { a.optString(it) }
+        }
+    }
+
+    fun add(raw: String) {
+        val t = raw.trim()
+        if (t.isEmpty() || blockedTags.contains(t)) return
+        blockedTags = blockedTags + t
+        revision++
+        prefs?.edit()?.putString("list", JSONArray(blockedTags).toString())?.apply()
+    }
+
+    fun remove(tag: String) {
+        blockedTags = blockedTags - tag
+        revision++
+        prefs?.edit()?.putString("list", JSONArray(blockedTags).toString())?.apply()
+    }
+
+    /** Record tags learned from an album detail fetch (empty recorded too,
+     * so tag-less albums are not refetched forever). */
+    fun remember(albumId: String, tags: List<String>) {
+        if (tagCache[albumId] == tags) return
+        tagCache[albumId] = tags
+        revision++
+        val obj = JSONObject()
+        for ((k, v) in tagCache) obj.put(k, JSONArray(v))
+        prefs?.edit()?.putString("cache", obj.toString())?.apply()
+    }
+
+    fun isBlocked(album: JmApi.Album): Boolean {
+        if (blockedTags.isEmpty()) return false
+        val hay = album.name + "\n" + album.author
+        for (t in blockedTags) if (hay.contains(t, ignoreCase = true)) return true
+        val tags = tagCache[album.id]
+        if (tags != null) for (t in blockedTags) if (tags.contains(t)) return true
+        return false
+    }
+
+    fun visible(items: List<JmApi.Album>): List<JmApi.Album> {
+        if (blockedTags.isEmpty()) return items
+        return items.filter { !isBlocked(it) }
+    }
+
+    /** Background: learn tags for listed albums whose tags are still
+     * unknown (4 at a time, at most 40 per call). */
+    fun prefetch(scope: CoroutineScope, items: List<JmApi.Album>) {
+        if (blockedTags.isEmpty()) return
+        val batch = items.map { it.id }.filter { !tagCache.containsKey(it) && !inFlight.contains(it) }.take(40)
+        if (batch.isEmpty()) return
+        inFlight.addAll(batch)
+        scope.launch {
+            for (id in batch) {
+                sem.withPermit {
+                    try {
+                        val d = JmApi.album(id)
+                        val t = d.optJSONArray("tags")
+                        val tags = mutableListOf<String>()
+                        if (t != null) for (i in 0 until t.length()) tags.add(t.optString(i))
+                        if (tags.isNotEmpty()) remember(id, tags)
+                    } catch (e: Exception) { /* leave unknown; retried next time */ }
+                }
+                inFlight.remove(id)
+            }
+        }
+    }
 }

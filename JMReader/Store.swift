@@ -397,3 +397,100 @@ final class SearchHistory: ObservableObject {
         UserDefaults.standard.removeObject(forKey: key)
     }
 }
+
+
+// MARK: - blocked tags (custom browse filter)
+
+/// User-defined tag blocklist. Browse surfaces (home shelves, channels,
+/// categories, search) hide matching comics two ways: immediately when the
+/// title / author / category contains a blocked word, and — once an album's
+/// real tags are known — when its detail tags contain a blocked tag. List
+/// endpoints return no tags, so tags are learned from detail fetches
+/// (opening a detail page, plus background prefetch from lists) and kept
+/// in a persisted cache. Favorites and history are never filtered.
+final class BlockTagStore: ObservableObject {
+    @Published private(set) var blockedTags: [String] = []
+    @Published private(set) var tagCache: [String: [String]] = [:]
+    private var inFlight: Set<String> = []
+
+    private let listKey = "jm.blockedTags.v1"
+    private let cacheKey = "jm.tagCache.v1"
+
+    init() {
+        if let arr = UserDefaults.standard.array(forKey: listKey) as? [String] {
+            blockedTags = arr
+        }
+        if let data = UserDefaults.standard.data(forKey: cacheKey),
+           let map = try? JSONDecoder().decode([String: [String]].self, from: data) {
+            tagCache = map
+        }
+    }
+
+    func add(_ raw: String) {
+        let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty, !blockedTags.contains(t) else { return }
+        blockedTags.append(t)
+        UserDefaults.standard.set(blockedTags, forKey: listKey)
+    }
+
+    func remove(_ tag: String) {
+        blockedTags.removeAll { $0 == tag }
+        UserDefaults.standard.set(blockedTags, forKey: listKey)
+    }
+
+    /// Record tags learned from an album detail fetch (empty is recorded
+    /// too, so tag-less albums are not refetched forever).
+    func remember(albumId: String, tags: [String]) {
+        guard tagCache[albumId] != tags else { return }
+        tagCache[albumId] = tags
+        if let data = try? JSONEncoder().encode(tagCache) {
+            UserDefaults.standard.set(data, forKey: cacheKey)
+        }
+    }
+
+    func isBlocked(_ comic: Comic) -> Bool {
+        guard !blockedTags.isEmpty else { return false }
+        let hay = comic.name + "\n" + comic.author + "\n" + comic.categoryTitle
+        for t in blockedTags where hay.localizedCaseInsensitiveContains(t) { return true }
+        if let tags = tagCache[comic.id] {
+            for t in blockedTags where tags.contains(t) { return true }
+        }
+        return false
+    }
+
+    func visible(_ items: [Comic]) -> [Comic] {
+        guard !blockedTags.isEmpty else { return items }
+        return items.filter { !isBlocked($0) }
+    }
+
+    /// Background: learn tags for listed albums whose tags are still
+    /// unknown (4 at a time, at most 40 per call). Once known, the
+    /// tag-based filter applies to them here and on future visits.
+    func prefetch(_ items: [Comic]) {
+        guard !blockedTags.isEmpty else { return }
+        let unknown = items.map(\.id).filter { tagCache[$0] == nil && !inFlight.contains($0) }
+        guard !unknown.isEmpty else { return }
+        let batch = Array(unknown.prefix(40))
+        batch.forEach { inFlight.insert($0) }
+        Task {
+            for chunkStart in stride(from: 0, to: batch.count, by: 4) {
+                let chunk = Array(batch[chunkStart..<min(chunkStart + 4, batch.count)])
+                let results = await withTaskGroup(of: (String, [String]).self) { group in
+                    for id in chunk {
+                        group.addTask {
+                            let d = try? await JMClient.shared.album(id: id)
+                            return (id, d?.tags ?? [])
+                        }
+                    }
+                    var out: [(String, [String])] = []
+                    for await r in group { out.append(r) }
+                    return out
+                }
+                for (id, tags) in results where !tags.isEmpty {
+                    self.remember(albumId: id, tags: tags)
+                }
+            }
+            batch.forEach { self.inFlight.remove($0) }
+        }
+    }
+}

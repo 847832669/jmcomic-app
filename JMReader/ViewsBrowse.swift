@@ -60,20 +60,30 @@ struct ComicCell: View {
 struct ComicGrid: View {
     let items: [Comic]
     var columnsOverride: Int? = nil
+    var applyBlockFilter = false
     var onLastAppear: (() -> Void)? = nil
     @EnvironmentObject var appState: AppState
+    @EnvironmentObject var blockStore: BlockTagStore
 
     var body: some View {
         let cols = columnsOverride ?? appState.gridColumns
+        let shown = applyBlockFilter ? blockStore.visible(items) : items
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: cols >= 4 ? 8 : 13), count: cols),
                   spacing: cols >= 4 ? 12 : 18) {
-            ForEach(items) { comic in
+            ForEach(shown) { comic in
                 NavigationLink(value: comic.id) { ComicCell(comic: comic, columns: cols) }
                     .buttonStyle(.plain)
-                    .onAppear { if comic.id == items.last?.id { onLastAppear?() } }
+                    .onAppear { if comic.id == shown.last?.id { onLastAppear?() } }
             }
         }
         .padding(.horizontal, cols >= 4 ? 10 : 14)
+        .task(id: applyBlockFilter ? items.map(\.id).joined(separator: ",") : "") {
+            if applyBlockFilter { blockStore.prefetch(items) }
+        }
+        .onAppear {
+            // A whole page filtered away: keep paging so the grid can fill.
+            if applyBlockFilter && shown.isEmpty && !items.isEmpty { onLastAppear?() }
+        }
     }
 }
 
@@ -249,7 +259,7 @@ struct FeedView: View {
                 ProgressView("加载中…").frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
-                    ComicGrid(items: items) { Task { await loadMore() } }
+                    ComicGrid(items: items, applyBlockFilter: true) { Task { await loadMore() } }
                         .padding(.top, 8)
                     if loading { ProgressView().padding() }
                     if !loading && items.isEmpty {
@@ -309,7 +319,7 @@ struct RecommendView: View {
                             Text("随机推荐")
                                 .font(.headline)
                                 .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 6)
-                            ComicGrid(items: randoms, columnsOverride: 2)
+                            ComicGrid(items: randoms, columnsOverride: 2, applyBlockFilter: true)
                         }
                         if sections.isEmpty && randoms.isEmpty && !loading {
                             Text("暂时没内容").foregroundColor(.secondary).padding(30)
@@ -335,25 +345,32 @@ struct RecommendView: View {
 
 struct ShelfRow: View {
     let section: PromoSection
+    @EnvironmentObject var blockStore: BlockTagStore
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(section.title)
-                .font(.headline)
-                .padding(.horizontal, 16)
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(alignment: .top, spacing: 12) {
-                    ForEach(section.items) { comic in
-                        NavigationLink(value: comic.id) {
-                            ComicCell(comic: comic, columns: 3)
-                                .frame(width: 102)
+        let shown = blockStore.visible(section.items)
+        if !shown.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(section.title)
+                    .font(.headline)
+                    .padding(.horizontal, 16)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(alignment: .top, spacing: 12) {
+                        ForEach(shown) { comic in
+                            NavigationLink(value: comic.id) {
+                                ComicCell(comic: comic, columns: 3)
+                                    .frame(width: 102)
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                     }
+                    .padding(.horizontal, 16)
                 }
-                .padding(.horizontal, 16)
+            }
+            .padding(.top, 12)
+            .task(id: section.items.map(\.id).joined(separator: ",")) {
+                blockStore.prefetch(section.items)
             }
         }
-        .padding(.top, 12)
     }
 }
 
@@ -418,7 +435,7 @@ struct CategoryListView: View {
                 ProgressView("加载中…")
             } else {
                 ScrollView {
-                    ComicGrid(items: items) { Task { await loadMore() } }
+                    ComicGrid(items: items, applyBlockFilter: true) { Task { await loadMore() } }
                         .padding(.top, 10)
                     if loading { ProgressView().padding() }
                     if !loading && items.isEmpty {
@@ -460,6 +477,7 @@ struct SearchView: View {
     @State private var loading = false
     @State private var searched = false
     @State private var doujinItems: [Comic] = []
+    @State private var doujinLoading = false
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -489,7 +507,7 @@ struct SearchView: View {
                             if !doujinItems.isEmpty {
                                 Text("同人推荐").font(.headline)
                                     .padding(.horizontal, 16).padding(.top, 20).padding(.bottom, 6)
-                                ComicGrid(items: doujinItems)
+                                ComicGrid(items: doujinItems, applyBlockFilter: true)
                             }
                         }
                         .padding(.bottom, 20)
@@ -502,7 +520,7 @@ struct SearchView: View {
                             Text("共 \(total) 本").font(.caption).foregroundColor(.secondary)
                                 .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16)
                         }
-                        ComicGrid(items: items) { Task { await loadMore() } }
+                        ComicGrid(items: items, applyBlockFilter: true) { Task { await loadMore() } }
                             .padding(.top, 4)
                         if loading { ProgressView().padding() }
                         if searched && !loading && items.isEmpty {
@@ -527,8 +545,21 @@ struct SearchView: View {
     }
 
     private func loadDoujin() async {
-        if !doujinItems.isEmpty { return }
-        doujinItems = (try? await JMClient.shared.categoryFilter(slug: "doujin", page: 1))?.items ?? []
+        // The recommendations used to vanish intermittently: a single failed
+        // (or .task-cancelled) fetch left doujinItems empty with no retry.
+        // Retry with backoff and only assign on success.
+        if !doujinItems.isEmpty || doujinLoading { return }
+        doujinLoading = true
+        defer { doujinLoading = false }
+        for attempt in 0..<3 {
+            if Task.isCancelled { return }
+            if let res = try? await JMClient.shared.categoryFilter(slug: "doujin", page: 1),
+               !res.items.isEmpty {
+                doujinItems = res.items
+                return
+            }
+            try? await Task.sleep(nanoseconds: UInt64(attempt + 1) * 1_500_000_000)
+        }
     }
 
     private var historyView: some View {
@@ -543,7 +574,6 @@ struct SearchView: View {
             } else {
                 Text("输入关键词开始搜索").foregroundColor(.secondary).padding(.top, 30)
             }
-            Spacer()
         }
         .padding(.horizontal, 16).padding(.top, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -575,6 +605,8 @@ struct SearchView: View {
 
 struct FlowChips: View {
     let items: [String]
+    var actionTitle: String? = nil
+    var onAction: ((String) -> Void)? = nil
     var onTap: (String) -> Void
     var body: some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 76), spacing: 8)], alignment: .leading, spacing: 8) {
@@ -585,8 +617,59 @@ struct FlowChips: View {
                         .background(Color.white.opacity(0.08)).cornerRadius(16)
                 }
                 .buttonStyle(.plain)
+                .contextMenu {
+                    if let actionTitle, let onAction {
+                        Button(role: .destructive) { onAction(s) } label: {
+                            Label(actionTitle, systemImage: "eye.slash")
+                        }
+                    }
+                }
             }
         }
+    }
+}
+
+// MARK: - blocked tags management
+
+struct BlockedTagsView: View {
+    @EnvironmentObject var blockStore: BlockTagStore
+    @State private var newTag = ""
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 8) {
+                    TextField("输入要屏蔽的标签", text: $newTag)
+                        .padding(.horizontal, 10).padding(.vertical, 8)
+                        .background(Color.white.opacity(0.08)).cornerRadius(10)
+                        .onSubmit { addNew() }
+                    Button("添加") { addNew() }
+                        .fontWeight(.semibold)
+                        .disabled(newTag.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+                if blockStore.blockedTags.isEmpty {
+                    Text("还没有屏蔽任何标签。在漫画详情页长按标签也可以快速屏蔽。")
+                        .foregroundColor(.secondary)
+                } else {
+                    Text("长按标签可取消屏蔽").font(.caption).foregroundColor(.secondary)
+                    FlowChips(items: blockStore.blockedTags,
+                              actionTitle: "取消屏蔽",
+                              onAction: { blockStore.remove($0) }) { _ in }
+                }
+                Text("在首页、分类、搜索等列表中，标题或作者含屏蔽词的作品会直接隐藏；作品的真实标签会随着浏览自动记录，之后按标签过滤。收藏与历史不受影响。")
+                    .font(.caption).foregroundColor(.secondary)
+                    .padding(.top, 6)
+            }
+            .padding(16)
+        }
+        .tabMinimizeOnScroll()
+        .navigationTitle("屏蔽标签")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func addNew() {
+        blockStore.add(newTag)
+        newTag = ""
     }
 }
 
@@ -662,6 +745,7 @@ struct FavoritesView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var library: LibraryStore
     @EnvironmentObject var account: AccountStore
+    @EnvironmentObject var blockStore: BlockTagStore
     @State private var showLogin = false
     @State private var favQuery = ""
     @AppStorage("jm.favSortNewest") private var sortNewest = true
@@ -674,6 +758,7 @@ struct FavoritesView: View {
                     ProfileStatsCard()
                     CheckinCard()
                     historyEntry
+                    blockedTagsEntry
                     favControls
                     if account.isLoggedIn {
                         sectionTitle("账号收藏")
@@ -729,6 +814,29 @@ struct FavoritesView: View {
                 Spacer()
                 if !library.progress.isEmpty {
                     Text("\(library.progress.count) 本")
+                        .font(.subheadline).foregroundColor(.secondary)
+                }
+                Image(systemName: "chevron.right")
+                    .font(.caption).foregroundColor(.secondary)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var blockedTagsEntry: some View {
+        NavigationLink {
+            BlockedTagsView()
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "eye.slash")
+                    .foregroundColor(accentPink)
+                Text("屏蔽标签").foregroundColor(.primary)
+                Spacer()
+                if !blockStore.blockedTags.isEmpty {
+                    Text("\(blockStore.blockedTags.count) 个")
                         .font(.subheadline).foregroundColor(.secondary)
                 }
                 Image(systemName: "chevron.right")
@@ -826,6 +934,7 @@ struct DetailView: View {
     @EnvironmentObject var library: LibraryStore
     @EnvironmentObject var account: AccountStore
     @EnvironmentObject var downloads: DownloadManager
+    @EnvironmentObject var blockStore: BlockTagStore
     @Environment(\.dismiss) private var dismiss
     @State private var detail: AlbumDetail?
     @State private var loadFailed = false
@@ -857,7 +966,9 @@ struct DetailView: View {
                             .padding(.horizontal, 16).padding(.top, 5)
                         if !d.tags.isEmpty {
                             VStack(alignment: .leading, spacing: 8) {
-                                FlowChips(items: tagsExpanded ? d.tags : Array(d.tags.prefix(8))) { appState.requestSearch($0) }
+                                FlowChips(items: tagsExpanded ? d.tags : Array(d.tags.prefix(8)),
+                                          actionTitle: "屏蔽此标签",
+                                          onAction: { blockStore.add($0) }) { appState.requestSearch($0) }
                                 if d.tags.count > 8 {
                                     Button { withAnimation { tagsExpanded.toggle() } } label: {
                                         Text(tagsExpanded ? "收起标签" : "展开全部 \(d.tags.count) 个标签")
@@ -1034,6 +1145,7 @@ struct DetailView: View {
         do {
             let d = try await JMClient.shared.album(id: albumId)
             detail = d
+            blockStore.remember(albumId: d.id, tags: d.tags)
             cloudFav = d.isFavorite
         } catch { loadFailed = true }
     }
@@ -1221,7 +1333,7 @@ struct AuthorWorksView: View {
     var body: some View {
         ScrollView {
             if !items.isEmpty {
-                ComicGrid(items: items) { Task { await loadMore() } }
+                ComicGrid(items: items, applyBlockFilter: true) { Task { await loadMore() } }
                     .padding(.top, 6)
             }
             if loading {
