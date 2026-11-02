@@ -36,6 +36,32 @@ final class ImagePipe {
         memCache.totalCostLimit = 96 * 1024 * 1024
     }
 
+    /// Disk usage of the image cache (Caches/JMImages), for the storage page.
+    func diskCacheUsage() -> (bytes: Int64, files: Int) {
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(at: diskDir, includingPropertiesForKeys: [.fileSizeKey]) else {
+            return (0, 0)
+        }
+        var bytes: Int64 = 0
+        var files = 0
+        for url in entries {
+            if let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize {
+                bytes += Int64(size)
+                files += 1
+            }
+        }
+        return (bytes, files)
+    }
+
+    /// Drop every cached image, on disk and in memory.
+    func clearDiskCache() {
+        let fm = FileManager.default
+        if let entries = try? fm.contentsOfDirectory(at: diskDir, includingPropertiesForKeys: nil) {
+            for url in entries { try? fm.removeItem(at: url) }
+        }
+        memCache.removeAllObjects()
+    }
+
     /// Load an image by path (e.g. /media/albums/123_3x4.jpg).
     /// If `scrambleNum` > 0 the downloaded page is de-scrambled before caching/returning.
     /// All heavy work (disk IO, decode, de-scramble) runs off the main thread;

@@ -748,6 +748,7 @@ struct FavoritesView: View {
     @EnvironmentObject var blockStore: BlockTagStore
     @State private var showLogin = false
     @State private var favQuery = ""
+    @State private var storageBytes: Int64?
     @AppStorage("jm.favSortNewest") private var sortNewest = true
 
     var body: some View {
@@ -759,6 +760,7 @@ struct FavoritesView: View {
                     CheckinCard()
                     historyEntry
                     blockedTagsEntry
+                    storageEntry
                     favControls
                     if account.isLoggedIn {
                         sectionTitle("账号收藏")
@@ -847,6 +849,35 @@ struct FavoritesView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    private var storageEntry: some View {
+        NavigationLink {
+            StorageView()
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "internaldrive")
+                    .foregroundColor(accentPink)
+                Text("存储空间").foregroundColor(.primary)
+                Spacer()
+                if let b = storageBytes {
+                    Text(ByteCountFormatter.string(fromByteCount: b, countStyle: .file))
+                        .font(.subheadline).foregroundColor(.secondary)
+                }
+                Image(systemName: "chevron.right")
+                    .font(.caption).foregroundColor(.secondary)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .task {
+            let usage = await Task.detached {
+                ImagePipe.shared.diskCacheUsage().bytes + DownloadedStore.diskUsage().bytes
+            }.value
+            storageBytes = usage
+        }
     }
 
     private func matchesQuery(_ c: Comic) -> Bool {
@@ -1166,24 +1197,175 @@ struct DownloadProgressStrip: View {
 }
 
 
+// MARK: - storage page (个人 page)
+
+struct StorageView: View {
+    @State private var imgBytes: Int64 = 0
+    @State private var imgFiles: Int = 0
+    @State private var dlBytes: Int64 = 0
+    @State private var dlFiles: Int = 0
+    @State private var confirmClear = false
+    @State private var justCleared = false
+
+    private func fmt(_ b: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: b, countStyle: .file)
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 14) {
+                VStack(spacing: 6) {
+                    Text("总占用").font(.caption).foregroundColor(.secondary)
+                    Text(fmt(imgBytes + dlBytes))
+                        .font(.system(.largeTitle, design: .rounded).weight(.bold))
+                        .foregroundColor(accentPink)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 18)
+                .glassSurface(RoundedRectangle(cornerRadius: 20, style: .continuous))
+
+                VStack(spacing: 0) {
+                    row(icon: "photo.stack", title: "图片缓存",
+                        sub: "\(imgFiles) 张封面与漫画页", value: fmt(imgBytes))
+                    Divider().padding(.leading, 46)
+                    row(icon: "arrow.down.doc", title: "已下载漫画",
+                        sub: "\(dlFiles) 本（PDF，在下载页左滑删除）", value: fmt(dlBytes))
+                }
+                .padding(.vertical, 6)
+                .glassSurface(RoundedRectangle(cornerRadius: 20, style: .continuous))
+
+                Button {
+                    confirmClear = true
+                } label: {
+                    HStack {
+                        Spacer()
+                        if justCleared {
+                            Label("已清理", systemImage: "checkmark.circle.fill")
+                        } else {
+                            Text("清理图片缓存")
+                        }
+                        Spacer()
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(justCleared ? .secondary : accentPink)
+                }
+                .disabled(imgBytes == 0 || justCleared)
+                .padding(.vertical, 13)
+                .glassSurface(RoundedRectangle(cornerRadius: 20, style: .continuous))
+
+                Text("图片缓存是看过的封面和漫画页，清掉不影响收藏与已下载漫画，下次打开会重新下载。")
+                    .font(.caption).foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 4)
+            }
+            .padding(16)
+        }
+        .navigationTitle("存储空间")
+        .navigationBarTitleDisplayMode(.inline)
+        .task { await reload() }
+        .confirmationDialog("清理图片缓存？", isPresented: $confirmClear, titleVisibility: .visible) {
+            Button("清理", role: .destructive) { Task { await clear() } }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("将清掉 \(fmt(imgBytes)) 图片缓存，已下载的漫画不受影响。")
+        }
+    }
+
+    private func row(icon: String, title: String, sub: String, value: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .foregroundColor(accentPink)
+                .frame(width: 22)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.subheadline)
+                Text(sub).font(.caption).foregroundColor(.secondary)
+            }
+            Spacer()
+            Text(value)
+                .font(.system(.subheadline, design: .rounded).weight(.semibold))
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    private func reload() async {
+        let usage = await Task.detached {
+            (ImagePipe.shared.diskCacheUsage(), DownloadedStore.diskUsage())
+        }.value
+        imgBytes = usage.0.bytes
+        imgFiles = usage.0.files
+        dlBytes = usage.1.bytes
+        dlFiles = usage.1.files
+    }
+
+    private func clear() async {
+        await Task.detached { ImagePipe.shared.clearDiskCache() }.value
+        justCleared = true
+        await reload()
+    }
+}
+
 // MARK: - profile stats strip (个人 page)
 
 struct ProfileStatsCard: View {
     @EnvironmentObject var account: AccountStore
+    @State private var showLogin = false
 
     var body: some View {
-        if account.isLoggedIn, let s = account.stats {
+        if account.isLoggedIn {
+            Group {
+                if let s = account.stats {
+                    statsCard(s)
+                } else {
+                    syncPrompt
+                }
+            }
+            .sheet(isPresented: $showLogin) { LoginView() }
+        }
+    }
+
+    /// exp / level / coin only arrive with the login response; a session that
+    /// has been alive since before the stats strip shipped has none cached.
+    private var syncPrompt: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("账号数据未同步").font(.subheadline.weight(.semibold))
+                Text("经验、等级、金币在登录时同步，重新登录一次即可显示")
+                    .font(.caption).foregroundColor(.secondary)
+            }
+            Spacer()
+            Button("重新登录") { showLogin = true }
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(accentPink)
+        }
+        .padding(.vertical, 13).padding(.horizontal, 14)
+        .glassSurface(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .padding(.horizontal, 16)
+        .padding(.top, 14)
+    }
+
+    private func statsCard(_ s: AccountStore.MemberStats) -> some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 10) {
+                Text("LV \(s.level)")
+                    .font(.system(.subheadline, design: .rounded).weight(.bold))
+                    .foregroundColor(accentPink)
+                ProgressView(value: Double(s.exp), total: Double(max(s.nextLevelExp, 1)))
+                    .tint(accentPink)
+                Text("\(s.exp)/\(s.nextLevelExp)")
+                    .font(.caption).foregroundColor(.secondary)
+                    .lineLimit(1)
+            }
             HStack(spacing: 0) {
-                stat("经验值", "\(s.exp)/\(s.nextLevelExp)")
-                stat("LV", "\(s.level)")
+                stat("经验值", "\(s.exp)")
                 stat("J Coins", "\(s.coin)")
                 stat("可收藏数量", "\(s.favoritesCount)/\(s.favoritesMax)")
             }
-            .padding(.vertical, 13).padding(.horizontal, 6)
-            .glassSurface(RoundedRectangle(cornerRadius: 20, style: .continuous))
-            .padding(.horizontal, 16)
-            .padding(.top, 14)
         }
+        .padding(.vertical, 13).padding(.horizontal, 14)
+        .glassSurface(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .padding(.horizontal, 16)
+        .padding(.top, 14)
     }
 
     private func stat(_ label: String, _ value: String) -> some View {

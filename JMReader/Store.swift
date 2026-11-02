@@ -91,6 +91,16 @@ final class AccountStore: ObservableObject {
         }
     }
 
+    /// The favorites endpoint reports the live total on every load; fold it
+    /// into the cached stats so the profile strip's 收藏 count never goes stale
+    /// (exp / level / coin only exist in the login response).
+    func syncFavoritesCount(_ total: Int) {
+        guard var st = stats, total > 0, st.favoritesCount != total else { return }
+        st.favoritesCount = total
+        stats = st
+        saveStats()
+    }
+
     /// After a successful check-in the server reports the delta ("Jcoin:2 EXP:2");
     /// fold it into the cached stats so the profile strip stays current.
     func applyCheckinReward(_ msg: String) {
@@ -197,6 +207,7 @@ final class AccountStore: ObservableObject {
         do {
             let res = try await JMClient.shared.favorites(page: cloudPage + 1)
             cloudTotal = res.total
+            syncFavoritesCount(res.total)
             if cloudPageSize == 0 { cloudPageSize = res.items.count }
             cloudPage += 1
             let known = Set(cloudFavorites.map(\.id))

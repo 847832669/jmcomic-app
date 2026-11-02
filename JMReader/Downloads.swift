@@ -64,6 +64,23 @@ final class DownloadedStore: ObservableObject {
         persist()
     }
 
+    /// On-disk footprint of the downloaded PDFs, for the storage page.
+    static func diskUsage() -> (bytes: Int64, files: Int) {
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(at: documents, includingPropertiesForKeys: [.fileSizeKey]) else {
+            return (0, 0)
+        }
+        var bytes: Int64 = 0
+        var files = 0
+        for url in entries where url.pathExtension.lowercased() == "pdf" {
+            if let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize {
+                bytes += Int64(size)
+                files += 1
+            }
+        }
+        return (bytes, files)
+    }
+
     private func persist() {
         if let d = try? JSONEncoder().encode(records) { try? d.write(to: storeURL, options: .atomic) }
     }
