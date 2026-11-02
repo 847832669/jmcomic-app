@@ -35,7 +35,7 @@
 
 在 [Releases](https://github.com/denia-dev/jmcomic-app/releases) 最新版发布中下载 APK 附件（`JMReader-Android-v….apk`）直接安装（调试签名），系统要求 Android 8.0 及以上。
 
-> ⚠️ **未验证**：Android 版仅完成编译构建，尚未在真机上运行测试。欢迎试用，并到 [Issues](https://github.com/denia-dev/jmcomic-app/issues) 反馈运行情况（机型 / 系统版本 / 遇到的问题）。
+> ⚠️ Android 版已在模拟器与真机初步试用（仍在完善中），遇到问题欢迎到 [Issues](https://github.com/denia-dev/jmcomic-app/issues) 反馈运行情况（机型 / 系统版本 / 遇到的问题）。
 
 ## 从源码构建
 
