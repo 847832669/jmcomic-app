@@ -188,7 +188,7 @@ final class JMClient {
                 }
             }
             var lastError: Error = JMError.badResponse
-            for await (host, result) in group {
+            for try await (host, result) in group {
                 switch result {
                 case .success(let value):
                     preferredHost = host
