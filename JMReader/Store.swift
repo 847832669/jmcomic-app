@@ -140,6 +140,7 @@ final class AccountStore: ObservableObject {
     @Published private(set) var cloudFavorites: [Comic] = []
     @Published private(set) var cloudTotal = 0
     @Published private(set) var cloudLoading = false
+    private var cloudBulkLoading = false
     private var cloudPage = 0
     private var cloudPageSize = 0
     private var cloudOwner: String?
@@ -219,6 +220,11 @@ final class AccountStore: ObservableObject {
     /// Load every remaining page CONCURRENTLY (sequential paging was the slow part).
     @MainActor
     func loadAllCloud() async {
+        // Two view tasks can ask for this at once; overlapping runs used to
+        // interleave their mutations of the published favorites array.
+        guard !cloudBulkLoading, !cloudLoading else { return }
+        cloudBulkLoading = true
+        defer { cloudBulkLoading = false }
         if cloudFavorites.isEmpty { await loadCloudPage() }
         guard isLoggedIn, !cloudFullyLoaded, cloudTotal > 0, cloudPageSize > 0 else { return }
         let totalPages = Int(ceil(Double(cloudTotal) / Double(cloudPageSize)))
@@ -235,14 +241,20 @@ final class AccountStore: ObservableObject {
             for await (p, items) in group { out[p] = items }
             return out
         }
-        let known = Set(cloudFavorites.map(\.id))
-        var seen = known
+        // Merge into a LOCAL array and publish ONCE. Appending item-by-item
+        // fired objectWillChange per comic (~1000 publishes for a big
+        // account), each re-rendering the whole favorites grid on the main
+        // thread — the profile page froze solid and the scene watchdog
+        // killed the app (0x8BADF00D, crash log 2026-11-03).
+        var merged = cloudFavorites
+        var seen = Set(merged.map(\.id))
         for p in remaining {
             for item in fetched[p] ?? [] where !seen.contains(item.id) {
                 seen.insert(item.id)
-                cloudFavorites.append(item)
+                merged.append(item)
             }
         }
+        if merged.count != cloudFavorites.count { cloudFavorites = merged }
         cloudPage = totalPages
         persistCloudSnapshot()
     }
