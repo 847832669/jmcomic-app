@@ -389,9 +389,12 @@ fun DownloadsScreen(router: Router) {
                         Text(t.title, fontSize = 14.sp, maxLines = 1)
                         Text(when (t.state) {
                             DownloadManager.State.RUNNING -> "下载中 ${t.done}/${t.total} 页"
-                            DownloadManager.State.DONE -> "已完成"
-                            DownloadManager.State.FAILED -> "失败"
+                            DownloadManager.State.DONE -> "已完成（也在系统下载/JMReader 里）"
+                            DownloadManager.State.FAILED -> "失败" + (t.error?.let { "：$it" } ?: "")
                         }, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (t.state == DownloadManager.State.FAILED) {
+                            TextButton(onClick = { DownloadManager.enqueue(context, t.album) }) { Text("继续", color = Pink) }
+                        }
                         if (t.state == DownloadManager.State.RUNNING && t.total > 0) {
                             LinearProgressIndicator(progress = { t.done.toFloat() / t.total }, color = Pink,
                                 modifier = Modifier.fillMaxWidth().padding(top = 4.dp))

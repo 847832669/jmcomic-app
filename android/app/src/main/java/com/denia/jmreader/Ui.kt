@@ -1,6 +1,11 @@
 package com.denia.jmreader
 
+import android.content.ContentValues
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.os.Build
+import android.provider.MediaStore
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -29,10 +34,16 @@ import coil.compose.AsyncImage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
+import java.util.concurrent.atomic.AtomicInteger
 
 val Pink = Color(0xFFFF2E88)
 val Blue = Color(0xFF0091FF)
@@ -91,20 +102,27 @@ fun ErrorText(msg: String) {
     }
 }
 
-// ---------- downloads (PDF into app-private Downloads, shareable via FileProvider) ----------
+// ---------- downloads (pages staged to disk first, then streamed into a PDF) ----------
 object DownloadManager {
     enum class State { RUNNING, DONE, FAILED }
-    class Task(val albumId: String, val title: String, state0: State, done0: Int, total0: Int) {
+    class Task(val album: JmApi.Album, state0: State, done0: Int, total0: Int) {
+        val albumId: String = album.id
+        val title: String = album.name
         var state by androidx.compose.runtime.mutableStateOf(state0)
         var done by androidx.compose.runtime.mutableIntStateOf(done0)
         var total by androidx.compose.runtime.mutableIntStateOf(total0)
+        var error by androidx.compose.runtime.mutableStateOf<String?>(null)
     }
     val tasks = mutableStateListOf<Task>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     fun dir(context: Context): File = File(context.filesDir, "Downloads").apply { mkdirs() }
+    private fun stagingDir(context: Context, albumId: String): File =
+        File(dir(context), ".staging-$albumId").apply { mkdirs() }
+    private fun pageFile(stage: File, idx: Int) = File(stage, "%05d.jpg".format(idx))
+
     fun files(context: Context): List<File> =
-        dir(context).listFiles { f -> f.extension == "pdf" || f.extension == "cbz" }
+        dir(context).listFiles { f -> f.isFile && (f.extension == "pdf" || f.extension == "cbz") }
             ?.sortedByDescending { it.lastModified() } ?: emptyList()
 
     fun share(context: Context, file: File) {
@@ -117,53 +135,108 @@ object DownloadManager {
         context.startActivity(Intent.createChooser(intent, "分享文件").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 
+    /** Best effort: also drop a copy into the system Downloads folder (Android 10+). */
+    private fun exportToDownloads(context: Context, file: File) {
+        if (Build.VERSION.SDK_INT < 29) return
+        try {
+            val resolver = context.contentResolver
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, file.name)
+                put(MediaStore.Downloads.MIME_TYPE, "application/pdf")
+                put(MediaStore.Downloads.RELATIVE_PATH, "Download/JMReader")
+                put(MediaStore.Downloads.IS_PENDING, 1)
+            }
+            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: return
+            val ok = resolver.openOutputStream(uri)?.use { out ->
+                file.inputStream().use { it.copyTo(out) }; true
+            } ?: false
+            if (ok) {
+                values.clear()
+                values.put(MediaStore.Downloads.IS_PENDING, 0)
+                resolver.update(uri, values, null, null)
+            } else {
+                resolver.delete(uri, null, null)
+            }
+        } catch (e: Exception) { /* export is best-effort; the in-app copy is authoritative */ }
+    }
+
     fun enqueue(context: Context, album: JmApi.Album) {
-        if (tasks.any { it.albumId == album.id && it.state == State.RUNNING }) return
-        val task = Task(album.id, album.name, State.RUNNING, 0, 0)
-        tasks.add(0, task)
+        val existing = tasks.firstOrNull { it.albumId == album.id }
+        if (existing?.state == State.RUNNING) return
+        val task = existing ?: Task(album, State.RUNNING, 0, 0).also { tasks.add(0, it) }
+        task.state = State.RUNNING
+        task.error = null
         val appCtx = context.applicationContext
         scope.launch {
             try {
                 val detail = JmApi.album(album.id)
                 val chapters = parseSeries(detail, album.id)
-                val totalPages = chapters.size // progress counted per chapter-page batch below (pages refine it)
-                var pageTotal = 0
-                var pageDone = 0
-                // first pass: count pages
-                val chapterData = mutableListOf<Pair<String, List<String>>>()
+                val pages = mutableListOf<Pair<String, String>>()
                 for ((cid, _) in chapters) {
                     val ch = JmApi.chapter(cid)
                     val imgs = ch.optJSONArray("images")
-                    val files = (0 until (imgs?.length() ?: 0)).map { imgs!!.optString(it) }
-                    chapterData.add(cid to files)
-                    pageTotal += files.size
+                    for (i in 0 until (imgs?.length() ?: 0)) pages.add(cid to imgs!!.optString(i))
                 }
-                withContext(Dispatchers.Main) { task.total = pageTotal; task.done = 0 }
+                val stage = stagingDir(appCtx, album.id)
+                val counter = AtomicInteger(pages.indices.count { pageFile(stage, it).let { f -> f.exists() && f.length() > 0 } })
+                withContext(Dispatchers.Main) { task.total = pages.size; task.done = counter.get() }
+                // Stage 1: fetch + descramble each page to a JPEG on disk (4-way parallel,
+                // 3 attempts per page). Pages already on disk are skipped, so a failed or
+                // killed download resumes where it stopped instead of starting over.
+                val sem = Semaphore(4)
+                coroutineScope {
+                    pages.mapIndexed { idx, (cid, f) ->
+                        async {
+                            val out = pageFile(stage, idx)
+                            if (out.exists() && out.length() > 0) return@async
+                            sem.withPermit {
+                                var lastErr: Exception? = null
+                                var ok = false
+                                var attempt = 0
+                                while (!ok && attempt < 3) {
+                                    attempt++
+                                    try {
+                                        val bytes = JmApi.fetchBytes(JmApi.photoUrl(cid, f))
+                                        val bmp = Descramble.decode(bytes, cid, f)
+                                        out.outputStream().buffered().use { bmp.compress(Bitmap.CompressFormat.JPEG, 88, it) }
+                                        if (!bmp.isRecycled) bmp.recycle()
+                                        ok = true
+                                    } catch (e: Exception) { lastErr = e }
+                                }
+                                if (!ok) throw lastErr ?: IllegalStateException("page failed")
+                            }
+                            val n = counter.incrementAndGet()
+                            withContext(Dispatchers.Main) { task.done = n }
+                        }
+                    }.awaitAll()
+                }
+                // Stage 2: assemble the PDF one page at a time from disk, so a long book
+                // no longer sits in memory as raw bitmaps before anything is written.
                 val outFile = File(dir(appCtx), "${album.id}_${album.name.replace(Regex("[\\\\/:*?\"<>|]"), "_").take(40)}.pdf")
                 val doc = android.graphics.pdf.PdfDocument()
                 try {
-                    var pageNum = 1
-                    for ((cid, files) in chapterData) {
-                        for (f in files) {
-                            val bytes = JmApi.fetchBytes(JmApi.photoUrl(cid, f))
-                            val bmp = Descramble.decode(bytes, cid, f)
-                            val info = android.graphics.pdf.PdfDocument.PageInfo.Builder(bmp.width, bmp.height, pageNum).create()
-                            val page = doc.startPage(info)
-                            page.canvas.drawBitmap(bmp, 0f, 0f, null)
-                            doc.finishPage(page)
-                            if (!bmp.isRecycled) bmp.recycle()
-                            pageNum++
-                            pageDone++
-                            withContext(Dispatchers.Main) { task.done = pageDone }
-                        }
+                    for (idx in pages.indices) {
+                        val bmp = BitmapFactory.decodeFile(pageFile(stage, idx).absolutePath)
+                            ?: throw IllegalStateException("bad page $idx")
+                        val info = android.graphics.pdf.PdfDocument.PageInfo.Builder(bmp.width, bmp.height, idx + 1).create()
+                        val page = doc.startPage(info)
+                        page.canvas.drawBitmap(bmp, 0f, 0f, null)
+                        doc.finishPage(page)
+                        bmp.recycle()
                     }
                     outFile.outputStream().buffered().use { doc.writeTo(it) }
                 } finally {
                     doc.close()
                 }
+                exportToDownloads(appCtx, outFile)
+                stage.deleteRecursively()
                 withContext(Dispatchers.Main) { task.state = State.DONE }
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { task.state = State.FAILED }
+                // Staged pages stay on disk: tapping 继续 resumes from them.
+                withContext(Dispatchers.Main) {
+                    task.error = e.message ?: e.javaClass.simpleName
+                    task.state = State.FAILED
+                }
             }
         }
     }
