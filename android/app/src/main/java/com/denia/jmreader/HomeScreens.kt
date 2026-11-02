@@ -18,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -59,6 +60,7 @@ fun PagedGrid(loader: suspend (Int) -> List<JmApi.Album>, router: Router, key: A
         } catch (e: Exception) { error = e.message }
         loading = false
     }
+    val scope = rememberCoroutineScope()
     LaunchedEffect(key) { load(1) }
     val shouldLoadMore by remember {
         derivedStateOf {
@@ -71,7 +73,7 @@ fun PagedGrid(loader: suspend (Int) -> List<JmApi.Album>, router: Router, key: A
 
     when {
         loading && items.isEmpty() -> LoadingBox()
-        error != null && items.isEmpty() -> ErrorText(error!!)
+        error != null && items.isEmpty() -> ErrorText(error!!) { error = null; scope.launch { load(1) } }
         else -> LazyVerticalGrid(GridCells.Fixed(3), state = gridState,
             contentPadding = PaddingValues(12.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -150,7 +152,8 @@ fun RecommendContent(router: Router) {
     var sections by remember { mutableStateOf<List<Pair<String, List<JmApi.Album>>>?>(null) }
     var randoms by remember { mutableStateOf<List<JmApi.Album>>(emptyList()) }
     var error by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(Unit) {
+    var reload by remember { mutableIntStateOf(0) }
+    LaunchedEffect(reload) {
         try {
             sections = JmApi.promote().filter { it.first != "連載更新" }
             randoms = JmApi.randomRecommend()
@@ -158,7 +161,7 @@ fun RecommendContent(router: Router) {
     }
     when {
         sections == null && error == null -> LoadingBox()
-        error != null -> ErrorText(error!!)
+        error != null -> ErrorText(error!!) { error = null; sections = null; reload++ }
         else -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(vertical = 10.dp)) {
             sections?.forEach { (title, albums) ->
                 Text(title, fontSize = 16.sp, fontWeight = FontWeight.Bold,

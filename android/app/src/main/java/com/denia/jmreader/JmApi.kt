@@ -56,18 +56,25 @@ object JmApi {
 
     suspend fun bootstrap() {
         if (bootstrapped) return
+        selectHost(null)
+        bootstrapped = true
+    }
+
+    /** Probe the candidate API hosts (a host that just failed goes last) and keep
+     *  the first one that answers /setting. */
+    private suspend fun selectHost(failedHost: String?) {
         bootstrapMutex.withLock {
-            if (bootstrapped) return
-            for (host in API_HOSTS) {
+            val ordered = if (failedHost == null) API_HOSTS
+                          else API_HOSTS.filter { it != failedHost } + failedHost
+            for (host in ordered) {
                 try {
                     apiHost = host
                     val d = request("GET", "setting", emptyMap(), null, skipBootstrap = true)
                     version = d.optString("jm3_version", version)
                     imgHost = d.optString("img_host", imgHost).removePrefix("https://").trimEnd('/')
-                    break
+                    return@withLock
                 } catch (e: Exception) { /* try next host */ }
             }
-            bootstrapped = true
         }
     }
 
@@ -92,7 +99,22 @@ object JmApi {
     }
 
     private suspend fun requestData(method: String, path: String, params: Map<String, String>, form: Map<String, String>?, skipBootstrap: Boolean = false): Any {
-        if (!skipBootstrap) bootstrap()
+        if (skipBootstrap) return executeOnce(method, path, params, form)
+        bootstrap()
+        for (attempt in 0..2) {
+            try {
+                return executeOnce(method, path, params, form)
+            } catch (e: java.io.IOException) {
+                // Transport failure (connection reset / timeout / DNS): switch to
+                // the other API host and retry instead of surfacing the raw error.
+                if (attempt == 2) break
+                selectHost(failedHost = apiHost)
+            }
+        }
+        throw ApiException("网络连接失败，请检查网络后重试")
+    }
+
+    private suspend fun executeOnce(method: String, path: String, params: Map<String, String>, form: Map<String, String>?): Any {
         return withContext(Dispatchers.IO) {
             val (token, tokenParam) = tokenPair()
             val allParams = mapOf("lang" to "TW") + params

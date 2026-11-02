@@ -7,7 +7,8 @@ import java.security.MessageDigest
 // Page un-scramble — verified numerically against the reference implementation.
 // aid = chapterId, stem = filename without extension:
 //   aid<220980 -> 0; aid<268850 -> 10; else x = 10 (aid<421926) or 8; num = (ord(last char of md5("aid+stem")) % x)*2+2
-// Bands are stored in reverse order; remainder rows join the bottom band.
+// Bands are stored in reverse order; the remainder rows ride with the stored
+// image's bottom band, which lands on top after reversal (iOS/jmcomic layout).
 object Descramble {
     fun splitNum(aid: Int, stem: String): Int {
         if (aid < 220980) return 0
@@ -34,21 +35,16 @@ object Descramble {
         val src = IntArray(w * h)
         bmp.getPixels(src, 0, w, 0, 0, w, h)
         val dst = IntArray(w * h)
-        // source bands in stored order: bands of heights [band+rem (top, = original bottom), band, band, ...]
-        // original layout: num bands each `band` tall, bottom one takes +rem.
-        val heightsSrc = IntArray(num) { band }
-        heightsSrc[0] = band + rem
-        val heightsDst = IntArray(num) { band }
-        heightsDst[num - 1] = band + rem
-        // mapping: stored band k corresponds to original band (num-1-k)
-        var srcY = 0
-        for (k in 0 until num) {
-            val dstBand = num - 1 - k
-            var dstY = 0
-            for (b in 0 until dstBand) dstY += heightsDst[b]
-            val hh = heightsSrc[k]
-            System.arraycopy(src, srcY * w, dst, dstY * w, hh * w)
-            srcY += hh
+        // Mirror of the verified iOS/reference implementation: destination
+        // band i (top-down) is copied from the stored image's i-th band
+        // counting from the bottom; the first destination band also takes
+        // the `rem` remainder rows from the stored image's tall bottom band.
+        for (i in 0 until num) {
+            var move = band
+            val srcY = h - move * (i + 1) - rem
+            var dstY = move * i
+            if (i == 0) move += rem else dstY += rem
+            System.arraycopy(src, srcY * w, dst, dstY * w, move * w)
         }
         val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         out.setPixels(dst, 0, w, 0, 0, w, h)

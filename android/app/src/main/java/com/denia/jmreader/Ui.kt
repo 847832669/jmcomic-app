@@ -10,11 +10,14 @@ import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
@@ -96,9 +99,12 @@ fun LoadingBox() {
 }
 
 @Composable
-fun ErrorText(msg: String) {
-    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+fun ErrorText(msg: String, onRetry: (() -> Unit)? = null) {
+    Column(Modifier.fillMaxWidth().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Text(msg, color = MaterialTheme.colorScheme.error)
+        if (onRetry != null) {
+            TextButton(onClick = onRetry) { Text("重试", color = Pink) }
+        }
     }
 }
 
