@@ -839,16 +839,17 @@ struct FavoritesView: View {
                                 .padding(.horizontal, 16)
                         } else {
                             ComicGrid(items: shownCloudWindow,
+                                      onLastAppear: {
+                                          if cloudRenderLimit < shownCloud.count {
+                                              cloudRenderLimit += 60
+                                          } else {
+                                              Task { await account.loadCloudPage() }
+                                          }
+                                      },
                                       folders: account.displayFolders,
                                       onMoveToFolder: { comic, fid in
                                           Task { await account.moveFavorite(aid: comic.id, toFolder: fid) }
-                                      }) {
-                                if cloudRenderLimit < shownCloud.count {
-                                    cloudRenderLimit += 60
-                                } else {
-                                    Task { await account.loadCloudPage() }
-                                }
-                            }
+                                      })
                         }
                         if account.cloudLoading { ProgressView().padding() }
                     }
