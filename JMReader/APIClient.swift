@@ -16,7 +16,8 @@ final class JMClient {
     static let shared = JMClient()
 
     private let seed = "185Hcomic3PAPP7R"
-    private let apiHosts = ["www.cdngwc.net", "www.cdnhjk.net"]
+    /// Live domain pool (official lines only, managed by LineStore).
+    private var apiHosts: [String] { LineStore.shared.apiHosts() }
     /// Last host that answered successfully; tried first for serial calls.
     private var preferredHost: String?
     private var version: String?
@@ -37,10 +38,20 @@ final class JMClient {
         return arr.compactMap { ($0 as? [String: Any]).map(Comic.init(dict:)) }
     }
 
-    func search(query: String, page: Int) async throws -> (total: Int, items: [Comic]) {
-        let data = try await request("search", params: ["search_query": query, "page": "\(page)"])
-        guard let obj = data as? [String: Any] else { return (0, []) }
-        return (anyInt(obj["total"]), Self.comicList(obj))
+    /// Search with the API's full parameter set (verified live 2026-11-04):
+    /// `o` order — mr 最新 / mv 最多观看 / tf 最多爱心 / mp 最多图片;
+    /// `main_tag` — 0 全部 / 1 作品 / 2 作者 / 3 标签 / 4 登场人物.
+    /// A pure-numeric query (a JM id) answers with `redirect_aid` instead of
+    /// a result list. The `t` time parameter is accepted by the server but
+    /// ignored for search, so it is not exposed.
+    func search(query: String, page: Int, order: String = "mr", mainTag: Int = 0)
+        async throws -> (total: Int, items: [Comic], redirectAid: String?) {
+        let data = try await request("search", params: [
+            "search_query": query, "page": "\(page)", "o": order, "main_tag": "\(mainTag)",
+        ])
+        guard let obj = data as? [String: Any] else { return (0, [], nil) }
+        let redirect = anyString(obj["redirect_aid"])
+        return (anyInt(obj["total"]), Self.comicList(obj), redirect.isEmpty ? nil : redirect)
     }
 
     func album(id: String) async throws -> AlbumDetail {
@@ -109,16 +120,41 @@ final class JMClient {
         return obj
     }
 
-    func favorites(page: Int) async throws -> (total: Int, items: [Comic]) {
-        let data = try await request("favorite", params: ["page": "\(page)"])
+    /// One page of cloud favorites in one folder ("0" = default folder).
+    /// The response also carries `folder_list` (all folders: FID + name).
+    func favorites(page: Int, folderId: String = "0")
+        async throws -> (total: Int, items: [Comic], folders: [FavFolder]) {
+        let data = try await request("favorite", params: ["page": "\(page)", "folder_id": folderId])
         if let obj = data as? [String: Any] {
-            return (anyInt(obj["total"]), Self.comicList(obj))
+            var folders: [FavFolder] = []
+            if let fl = obj["folder_list"] as? [Any] {
+                folders = fl.compactMap { ($0 as? [String: Any]).map {
+                    FavFolder(id: anyString($0["FID"]), name: anyString($0["name"]))
+                } }.filter { !$0.id.isEmpty }
+            }
+            return (anyInt(obj["total"]), Self.comicList(obj), folders)
         }
         if let arr = data as? [Any] {
             let items = arr.compactMap { ($0 as? [String: Any]).map(Comic.init(dict:)) }
-            return (items.count, items)
+            return (items.count, items, [])
         }
-        return (0, [])
+        return (0, [], [])
+    }
+
+    /// Folder management lives on POST favorite_folder (verified against the
+    /// API ecosystem): type=add/del/move.
+    func favoriteFolderAdd(name: String) async throws {
+        _ = try await postForm("favorite_folder", fields: ["type": "add", "folder_name": name])
+    }
+
+    func favoriteFolderDelete(folderId: String) async throws {
+        _ = try await postForm("favorite_folder", fields: ["type": "del", "folder_id": folderId])
+    }
+
+    /// A comic lives in exactly one folder; moving reassigns it.
+    func favoriteFolderMove(albumId: String, folderId: String) async throws {
+        _ = try await postForm("favorite_folder",
+                               fields: ["type": "move", "folder_id": folderId, "aid": albumId])
     }
 
     func addFavorite(albumId: String) async throws {
@@ -167,8 +203,12 @@ final class JMClient {
     private static let ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.7 Mobile/15E148 Safari/604.1"
 
     private func orderedHosts() -> [String] {
-        guard let preferredHost, apiHosts.contains(preferredHost) else { return apiHosts }
-        return [preferredHost] + apiHosts.filter { $0 != preferredHost }
+        let hosts = apiHosts
+        if let manual = LineStore.shared.manualAPIHost, hosts.contains(manual) {
+            return [manual] + hosts.filter { $0 != manual }
+        }
+        guard let preferredHost, hosts.contains(preferredHost) else { return hosts }
+        return [preferredHost] + hosts.filter { $0 != preferredHost }
     }
 
     private func request(_ path: String, params: [String: String]) async throws -> Any {
@@ -180,6 +220,21 @@ final class JMClient {
         // search page felt stuck.
         let hosts = orderedHosts()
         if hosts.count == 1 { return try await getOnce(host: hosts[0], path: path, params: params) }
+        if LineStore.shared.manualAPIHost != nil {
+            // Manual line: the pinned host goes alone first; only a hard
+            // failure falls back to racing the rest of the pool.
+            do {
+                let value = try await getOnce(host: hosts[0], path: path, params: params)
+                preferredHost = hosts[0]
+                return value
+            } catch {
+                return try await raceHosts(Array(hosts.dropFirst()), path: path, params: params)
+            }
+        }
+        return try await raceHosts(hosts, path: path, params: params)
+    }
+
+    private func raceHosts(_ hosts: [String], path: String, params: [String: String]) async throws -> Any {
         return try await withThrowingTaskGroup(of: (String, Result<Any, Error>).self) { group in
             for host in hosts {
                 group.addTask {

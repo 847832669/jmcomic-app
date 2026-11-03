@@ -25,6 +25,11 @@ struct ReaderView: View {
     @State private var jumpTarget: Int?
     @State private var sliderValue: Double = 0
     @State private var didInit = false
+    @State private var displayIndex: Int = 0
+    @AppStorage("reader.mode") private var readerMode = "scroll"   // scroll | page
+    @AppStorage("reader.rtl") private var readerRTL = false
+
+    private var paged: Bool { readerMode == "page" }
 
     private var chapters: [ChapterRef] {
         !route.chapters.isEmpty ? route.chapters : seriesFromAPI
@@ -41,6 +46,12 @@ struct ReaderView: View {
         .toolbar(.hidden, for: .navigationBar)
         .restoreSwipeBack()
         .swipeAnywhereBack { dismiss() }
+        .onChange(of: readerRTL) { _ in
+            if paged { displayIndex = displayIndex(forLogical: currentPage) }
+        }
+        .onChange(of: readerMode) { _ in
+            if paged { displayIndex = displayIndex(forLogical: currentPage) }
+        }
                         .task {
             if !didInit {
                 didInit = true
@@ -51,37 +62,102 @@ struct ReaderView: View {
 
     private var content: some View {
         ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(Array(pages.enumerated()), id: \.offset) { idx, file in
-                        ReaderPageView(chapterId: chapterId, file: file)
-                            .id(idx)
-                            .onAppear {
-                                currentPage = idx
-                                sliderValue = Double(idx)
-                                saveProgress()
-                                prefetch(after: idx)
-                            }
-                    }
-                    if loadFailed {
-                        Text("这一话加载失败，下拉或重进试试").foregroundColor(.gray)
-                            .padding(.vertical, 60)
-                    } else if !pages.isEmpty {
-                        Text("— 本话完 —").foregroundColor(.gray).font(.footnote)
-                            .padding(.vertical, 34)
-                    }
+            Group {
+                if paged {
+                    pagedContent
+                } else {
+                    scrollContent
                 }
             }
-            .simultaneousGesture(TapGesture().onEnded {
-                withAnimation(.easeInOut(duration: 0.2)) { showChrome.toggle() }
-            })
             .onChange(of: jumpTarget) { target in
                 if let target {
-                    withAnimation { proxy.scrollTo(target, anchor: .top) }
+                    if paged {
+                        displayIndex = displayIndex(forLogical: target)
+                    } else {
+                        withAnimation { proxy.scrollTo(target, anchor: .top) }
+                    }
                     jumpTarget = nil
                 }
             }
         }
+    }
+
+    private var scrollContent: some View {
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                ForEach(Array(pages.enumerated()), id: \.offset) { idx, file in
+                    ReaderPageView(chapterId: chapterId, file: file)
+                        .id(idx)
+                        .onAppear {
+                            currentPage = idx
+                            sliderValue = Double(idx)
+                            saveProgress()
+                            prefetch(after: idx)
+                        }
+                }
+                if loadFailed {
+                    Text("这一话加载失败，下拉或重进试试").foregroundColor(.gray)
+                        .padding(.vertical, 60)
+                } else if !pages.isEmpty {
+                    Text("— 本话完 —").foregroundColor(.gray).font(.footnote)
+                        .padding(.vertical, 34)
+                }
+            }
+        }
+        .simultaneousGesture(TapGesture().onEnded {
+            withAnimation(.easeInOut(duration: 0.2)) { showChrome.toggle() }
+        })
+    }
+
+    // MARK: - paged (horizontal) mode
+
+    private func displayIndex(forLogical page: Int) -> Int {
+        readerRTL ? max(pages.count - 1 - page, 0) : page
+    }
+    private func logicalPage(forDisplay idx: Int) -> Int {
+        readerRTL ? max(pages.count - 1 - idx, 0) : idx
+    }
+
+    private var pagedContent: some View {
+        TabView(selection: $displayIndex) {
+            ForEach(pages.indices, id: \.self) { dIdx in
+                let logical = logicalPage(forDisplay: dIdx)
+                ZStack {
+                    ReaderPageView(chapterId: chapterId, file: pages[logical])
+                    HStack(spacing: 0) {
+                        tapZone { stepPage(displayDelta: readerRTL ? 1 : -1) }
+                        tapZone {
+                            withAnimation(.easeInOut(duration: 0.2)) { showChrome.toggle() }
+                        }
+                        tapZone { stepPage(displayDelta: readerRTL ? -1 : 1) }
+                    }
+                }
+                .tag(dIdx)
+            }
+        }
+        .tabViewStyle(.page(indexDisplayMode: .never))
+        .onChange(of: displayIndex) { newValue in
+            let logical = logicalPage(forDisplay: newValue)
+            if logical != currentPage {
+                currentPage = logical
+                sliderValue = Double(logical)
+                saveProgress()
+                prefetch(after: logical)
+            }
+        }
+    }
+
+    private func tapZone(action: @escaping () -> Void) -> some View {
+        Color.clear
+            .contentShape(Rectangle())
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .onTapGesture { action() }
+    }
+
+    private func stepPage(displayDelta: Int) {
+        let next = displayIndex + displayDelta
+        guard pages.indices.contains(next) else { return }
+        withAnimation { displayIndex = next }
     }
 
     private var chromeOverlay: some View {
@@ -96,6 +172,20 @@ struct ReaderView: View {
                     .padding(.horizontal, 10).padding(.vertical, 6)
                     .glassSurface(RoundedRectangle(cornerRadius: 10))
                 Spacer()
+                Menu {
+                    Button(paged ? "上下卷轴" : "✓ 上下卷轴") { readerMode = "scroll" }
+                    Button(paged ? "✓ 横向翻页" : "横向翻页") { readerMode = "page" }
+                    if paged {
+                        Divider()
+                        Button(readerRTL ? "从左往右" : "✓ 从左往右") { readerRTL = false }
+                        Button(readerRTL ? "✓ 从右往左" : "从右往左") { readerRTL = true }
+                    }
+                } label: {
+                    Image(systemName: "rectangle.split.2x1")
+                        .font(.subheadline)
+                        .padding(9)
+                        .glassSurface(Circle(), interactive: true)
+                }
                 Text(pages.isEmpty ? "" : "\(currentPage + 1) / \(pages.count)")
                     .font(.caption)
                     .padding(.horizontal, 10).padding(.vertical, 6)
@@ -142,6 +232,7 @@ struct ReaderView: View {
             if !ch.series.isEmpty { seriesFromAPI = ch.series }
             currentPage = 0
             sliderValue = 0
+            displayIndex = displayIndex(forLogical: 0)
             loading = false
             if page > 0 && page < ch.images.count {
                 // give layout a beat, then jump

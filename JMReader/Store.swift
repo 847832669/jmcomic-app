@@ -166,6 +166,117 @@ final class AccountStore: ObservableObject {
 
     var cloudFullyLoaded: Bool { cloudTotal > 0 && cloudFavorites.count >= cloudTotal }
 
+    // MARK: - cloud favorite folders
+
+    @Published private(set) var cloudFolders: [FavFolder] = []
+    @Published private(set) var cloudFolderId: String = "0"
+    /// Non-default folders are cached in memory only (the disk snapshot and
+    /// the reconcile machinery stay scoped to the default folder).
+    private var folderItems: [String: [Comic]] = [:]
+    private var folderTotals: [String: Int] = [:]
+    private var folderPages: [String: Int] = [:]
+    private var folderLoading = false
+
+    /// Folders as shown in pickers: the default folder always comes first.
+    var displayFolders: [FavFolder] {
+        if cloudFolders.contains(where: { $0.id == "0" }) { return cloudFolders }
+        return [FavFolder(id: "0", name: "默认收藏")] + cloudFolders
+    }
+
+    var displayedCloud: [Comic] {
+        cloudFolderId == "0" ? cloudFavorites : (folderItems[cloudFolderId] ?? [])
+    }
+    var displayedCloudTotal: Int {
+        cloudFolderId == "0" ? cloudTotal : (folderTotals[cloudFolderId] ?? 0)
+    }
+    var displayedCloudFullyLoaded: Bool {
+        displayedCloudTotal > 0 && displayedCloud.count >= displayedCloudTotal
+    }
+
+    private func noteFolders(_ folders: [FavFolder]) {
+        if !folders.isEmpty { cloudFolders = folders }
+    }
+
+    func switchFolder(_ id: String) async {
+        guard id != cloudFolderId else { return }
+        cloudFolderId = id
+        if id != "0", folderItems[id] == nil { await loadFolderPage() }
+    }
+
+    func loadFolderPage(reset: Bool = false) async {
+        let fid = cloudFolderId
+        guard fid != "0", !folderLoading, isLoggedIn else { return }
+        if reset { folderItems[fid] = []; folderPages[fid] = 0; folderTotals[fid] = 0 }
+        let loaded = folderItems[fid] ?? []
+        if !loaded.isEmpty, let t = folderTotals[fid], loaded.count >= t { return }
+        folderLoading = true
+        cloudLoading = true
+        defer { folderLoading = false; cloudLoading = false }
+        do {
+            let page = (folderPages[fid] ?? 0) + 1
+            let res = try await JMClient.shared.favorites(page: page, folderId: fid)
+            noteFolders(res.folders)
+            folderTotals[fid] = res.total
+            folderPages[fid] = page
+            let known = Set(loaded.map(\.id))
+            folderItems[fid] = loaded + res.items.filter { !known.contains($0.id) }
+        } catch { /* keep what we have */ }
+    }
+
+    func createFolder(name: String) async {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        do {
+            try await JMClient.shared.favoriteFolderAdd(name: name)
+            await refreshFolderList()
+        } catch { /* surface nothing; list simply stays unchanged */ }
+    }
+
+    func deleteFolder(id: String) async {
+        guard id != "0" else { return }
+        do {
+            try await JMClient.shared.favoriteFolderDelete(folderId: id)
+            folderItems[id] = nil; folderTotals[id] = nil; folderPages[id] = nil
+            if cloudFolderId == id { cloudFolderId = "0" }
+            await refreshFolderList()
+        } catch { /* keep state */ }
+    }
+
+    private func refreshFolderList() async {
+        if let res = try? await JMClient.shared.favorites(page: 1, folderId: cloudFolderId) {
+            noteFolders(res.folders)
+        }
+    }
+
+    func moveFavorite(aid: String, toFolder: String) async {
+        do {
+            try await JMClient.shared.favoriteFolderMove(albumId: aid, folderId: toFolder)
+            await applyFolderMove(aid: aid, toFolder: toFolder)
+        } catch { /* keep state */ }
+    }
+
+    /// After a move: drop the comic from every cached list except the
+    /// target's, and invalidate the target so it refetches.
+    func applyFolderMove(aid: String, toFolder: String) async {
+        if toFolder != "0", cloudFavorites.contains(where: { $0.id == aid }) {
+            cloudFavorites.removeAll { $0.id == aid }
+            cloudTotal = max(0, cloudTotal - 1)
+            syncFavoritesCount(cloudTotal)
+            persistCloudSnapshot()
+        }
+        for key in Array(folderItems.keys) where key != toFolder {
+            folderItems[key]?.removeAll { $0.id == aid }
+            if let items = folderItems[key] { folderTotals[key] = items.count }
+        }
+        if toFolder != "0" {
+            folderItems[toFolder] = nil; folderTotals[toFolder] = nil; folderPages[toFolder] = nil
+            if cloudFolderId == toFolder { await loadFolderPage() }
+        } else if cloudFolderId == "0" {
+            // Moved back to the default folder: a front-reconcile picks it up.
+            await reconcileCloudCache()
+        }
+    }
+
     private var persistScheduled = false
 
     /// Encoding a 1000+ item snapshot on the main thread was part of the
@@ -204,6 +315,8 @@ final class AccountStore: ObservableObject {
         if cloudOwner != username {
             cloudOwner = username
             cloudFavorites = []; cloudPage = 0; cloudTotal = 0; cloudPageSize = 0
+            cloudFolders = []; cloudFolderId = "0"
+            folderItems = [:]; folderTotals = [:]; folderPages = [:]
             await hydrateCloudFromDisk()
         }
         if cloudFavorites.isEmpty {
@@ -222,6 +335,7 @@ final class AccountStore: ObservableObject {
     /// and only a SHRINK (unfavorited elsewhere) falls back to a reload.
     private func reconcileCloudCache() async {
         guard let res = try? await JMClient.shared.favorites(page: 1) else { return }
+        noteFolders(res.folders)
         if res.total == cloudTotal && res.items.first?.id == cloudFavorites.first?.id {
             return // cache is fresh
         }
@@ -257,11 +371,13 @@ final class AccountStore: ObservableObject {
 
     func loadCloudPage() async {
         guard !cloudLoading, isLoggedIn else { return }
+        if cloudFolderId != "0" { await loadFolderPage(); return }
         if !cloudFavorites.isEmpty && cloudFullyLoaded { return }
         cloudLoading = true
         defer { cloudLoading = false }
         do {
             let res = try await JMClient.shared.favorites(page: cloudPage + 1)
+            noteFolders(res.folders)
             cloudTotal = res.total
             syncFavoritesCount(res.total)
             if cloudPageSize == 0 { cloudPageSize = res.items.count }
@@ -274,6 +390,17 @@ final class AccountStore: ObservableObject {
 
     /// Load every remaining page CONCURRENTLY (sequential paging was the slow part).
     func loadAllCloud() async {
+        if cloudFolderId != "0" {
+            // Non-default folders: page through everything sequentially.
+            var guardPages = 0
+            while !displayedCloudFullyLoaded, guardPages < 80 {
+                let before = displayedCloud.count
+                await loadFolderPage()
+                guardPages += 1
+                if displayedCloud.count == before { break }
+            }
+            return
+        }
         // Two view tasks can ask for this at once; overlapping runs used to
         // interleave their mutations of the published favorites array.
         guard !cloudBulkLoading, !cloudLoading else { return }
@@ -328,6 +455,8 @@ final class AccountStore: ObservableObject {
         username = nil
         stats = nil
         cloudFavorites = []; cloudTotal = 0; cloudPage = 0; cloudPageSize = 0; cloudOwner = nil
+        cloudFolders = []; cloudFolderId = "0"
+        folderItems = [:]; folderTotals = [:]; folderPages = [:]
         UserDefaults.standard.removeObject(forKey: cloudKey)
         UserDefaults.standard.removeObject(forKey: statsKey)
     }

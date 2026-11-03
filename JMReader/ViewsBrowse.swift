@@ -62,6 +62,9 @@ struct ComicGrid: View {
     var columnsOverride: Int? = nil
     var applyBlockFilter = false
     var onLastAppear: (() -> Void)? = nil
+    /// When set, cells get a "移动到收藏夹" context menu (cloud favorites only).
+    var folders: [FavFolder] = []
+    var onMoveToFolder: ((Comic, String) -> Void)? = nil
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var blockStore: BlockTagStore
 
@@ -74,6 +77,15 @@ struct ComicGrid: View {
                 NavigationLink(value: comic.id) { ComicCell(comic: comic, columns: cols) }
                     .buttonStyle(.plain)
                     .onAppear { if comic.id == shown.last?.id { onLastAppear?() } }
+                    .contextMenu {
+                        if let onMoveToFolder, !folders.isEmpty {
+                            Menu("移动到收藏夹") {
+                                ForEach(folders) { f in
+                                    Button(f.name) { onMoveToFolder(comic, f.id) }
+                                }
+                            }
+                        }
+                    }
             }
         }
         .padding(.horizontal, cols >= 4 ? 10 : 14)
@@ -279,13 +291,14 @@ struct FeedView: View {
         loading = true
         defer { loading = false }
         do {
-            let res: (total: Int, items: [Comic])
+            let res: (total: Int, items: [Comic], redirectAid: String?)
             switch source {
             case .latest:
                 let list = try await JMClient.shared.latest(page: page + 1)
-                res = (Int.max, list)
+                res = (Int.max, list, nil)
             case .category(let slug):
-                res = try await JMClient.shared.categoryFilter(slug: slug, page: page + 1)
+                let cf = try await JMClient.shared.categoryFilter(slug: slug, page: page + 1)
+                res = (cf.total, cf.items, nil)
             case .tagSearch(let q):
                 res = try await JMClient.shared.search(query: q, page: page + 1)
             }
@@ -478,6 +491,8 @@ struct SearchView: View {
     @State private var searched = false
     @State private var doujinItems: [Comic] = []
     @State private var doujinLoading = false
+    @State private var searchOrder = "mr"
+    @State private var searchMainTag = 0
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -499,6 +514,17 @@ struct SearchView: View {
                     Button("搜索") { runSearch(query) }.fontWeight(.semibold)
                 }
                 .padding(12)
+
+                VStack(spacing: 6) {
+                    chipRow(label: "类型",
+                            options: [(0, "全部"), (1, "作品"), (2, "作者"), (3, "标签"), (4, "人物")],
+                            selection: $searchMainTag)
+                    chipRow(label: "排序",
+                            options: [("mr", "最新"), ("mv", "最多观看"), ("tf", "最多爱心"), ("mp", "最多图片")],
+                            selection: $searchOrder)
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
 
                 if !searched && items.isEmpty {
                     ScrollView {
@@ -535,6 +561,8 @@ struct SearchView: View {
                         .withDestinations()
         }
         .onChange(of: appState.searchFocusToken) { _ in focused = true }
+        .onChange(of: searchOrder) { _ in if searched { runSearch(query) } }
+        .onChange(of: searchMainTag) { _ in if searched { runSearch(query) } }
         .onAppear {
             if let pending = appState.pendingSearch {
                 appState.pendingSearch = nil
@@ -595,11 +623,46 @@ struct SearchView: View {
         loading = true
         defer { loading = false }
         do {
-            let res = try await JMClient.shared.search(query: query, page: page + 1)
+            let res = try await JMClient.shared.search(query: query, page: page + 1,
+                                                       order: searchOrder, mainTag: searchMainTag)
             total = res.total
             page += 1
+            if page == 1, let aid = res.redirectAid,
+               let detail = try? await JMClient.shared.album(id: aid) {
+                // JM id ("车牌号") search: the API points straight at one album.
+                items = [Comic(id: detail.id, name: detail.name,
+                               author: detail.authors.first ?? "")]
+                total = 1
+                return
+            }
             items += res.items
         } catch { /* keep what we have */ }
+    }
+
+    private func chipRow<V: Hashable>(label: String, options: [(V, String)],
+                                      selection: Binding<V>) -> some View {
+        HStack(spacing: 6) {
+            Text(label).font(.caption).foregroundColor(.secondary)
+                .frame(width: 28, alignment: .leading)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(options.indices, id: \.self) { i in
+                        let opt = options[i]
+                        Button {
+                            selection.wrappedValue = opt.0
+                        } label: {
+                            Text(opt.1)
+                                .font(.caption.weight(selection.wrappedValue == opt.0 ? .bold : .regular))
+                                .padding(.horizontal, 10).padding(.vertical, 5)
+                                .background(selection.wrappedValue == opt.0 ? accentPink : Color.white.opacity(0.08))
+                                .foregroundColor(selection.wrappedValue == opt.0 ? .white : .primary)
+                                .cornerRadius(13)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -748,7 +811,9 @@ struct FavoritesView: View {
     @EnvironmentObject var blockStore: BlockTagStore
     @State private var showLogin = false
     @State private var favQuery = ""
-    @State private var storageBytes: Int64?
+    @State private var showNewFolder = false
+    @State private var newFolderName = ""
+    @State private var folderToDelete: FavFolder?
     // Render window for the cloud grid: the whole favorites list lives in
     // memory, but building all ~1000 cells the moment the profile page
     // opens (nested grid inside a VStack scroll view can go eager, and a
@@ -765,16 +830,19 @@ struct FavoritesView: View {
                     ProfileStatsCard()
                     CheckinCard()
                     historyEntry
-                    blockedTagsEntry
-                    storageEntry
                     favControls
                     if account.isLoggedIn {
+                        folderChips
                         sectionTitle("账号收藏")
                         if shownCloud.isEmpty && !account.cloudLoading {
-                            Text(favQuery.isEmpty ? "账号里还没有收藏" : "没有匹配的收藏").foregroundColor(.secondary)
+                            Text(favQuery.isEmpty ? "这个收藏夹还没有收藏" : "没有匹配的收藏").foregroundColor(.secondary)
                                 .padding(.horizontal, 16)
                         } else {
-                            ComicGrid(items: shownCloudWindow) {
+                            ComicGrid(items: shownCloudWindow,
+                                      folders: account.displayFolders,
+                                      onMoveToFolder: { comic, fid in
+                                          Task { await account.moveFavorite(aid: comic.id, toFolder: fid) }
+                                      }) {
                                 if cloudRenderLimit < shownCloud.count {
                                     cloudRenderLimit += 60
                                 } else {
@@ -804,7 +872,18 @@ struct FavoritesView: View {
             }
             .tabMinimizeOnScroll()
             .navigationTitle("个人")
-                                    .toolbar { ToolbarItem(placement: .topBarTrailing) { ColumnButton() } }
+                                    .toolbar {
+                                        ToolbarItem(placement: .topBarTrailing) {
+                                            HStack(spacing: 14) {
+                                                ColumnButton()
+                                                NavigationLink {
+                                                    SettingsView()
+                                                } label: {
+                                                    Image(systemName: "gearshape")
+                                                }
+                                            }
+                                        }
+                                    }
             .withDestinations()
             .sheet(isPresented: $showLogin) { LoginView() }
             .task(id: account.username) {
@@ -816,6 +895,7 @@ struct FavoritesView: View {
             }
             .onChange(of: favQuery) { _ in cloudRenderLimit = 60 }
             .onChange(of: sortNewest) { _ in cloudRenderLimit = 60 }
+            .onChange(of: account.cloudFolderId) { _ in cloudRenderLimit = 60 }
         }
     }
 
@@ -842,58 +922,6 @@ struct FavoritesView: View {
         .buttonStyle(.plain)
     }
 
-    private var blockedTagsEntry: some View {
-        NavigationLink {
-            BlockedTagsView()
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: "eye.slash")
-                    .foregroundColor(accentPink)
-                Text("屏蔽标签").foregroundColor(.primary)
-                Spacer()
-                if !blockStore.blockedTags.isEmpty {
-                    Text("\(blockStore.blockedTags.count) 个")
-                        .font(.subheadline).foregroundColor(.secondary)
-                }
-                Image(systemName: "chevron.right")
-                    .font(.caption).foregroundColor(.secondary)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    private var storageEntry: some View {
-        NavigationLink {
-            StorageView()
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: "internaldrive")
-                    .foregroundColor(accentPink)
-                Text("存储空间").foregroundColor(.primary)
-                Spacer()
-                if let b = storageBytes {
-                    Text(ByteCountFormatter.string(fromByteCount: b, countStyle: .file))
-                        .font(.subheadline).foregroundColor(.secondary)
-                }
-                Image(systemName: "chevron.right")
-                    .font(.caption).foregroundColor(.secondary)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .task {
-            let usage = await Task.detached {
-                ImagePipe.shared.diskCacheUsage().bytes + DownloadedStore.diskUsage().bytes
-            }.value
-            storageBytes = usage
-        }
-    }
-
     private func matchesQuery(_ c: Comic) -> Bool {
         favQuery.isEmpty
             || c.name.localizedCaseInsensitiveContains(favQuery)
@@ -901,9 +929,9 @@ struct FavoritesView: View {
     }
 
     private var shownCloud: [Comic] {
-        var r = account.cloudFavorites.filter(matchesQuery)
+        var r = account.displayedCloud.filter(matchesQuery)
         // 只在全部加载完后才反转，半截数据反转必然是乱的
-        if !sortNewest && account.cloudFullyLoaded { r.reverse() }
+        if !sortNewest && account.displayedCloudFullyLoaded { r.reverse() }
         return r
     }
 
@@ -944,6 +972,64 @@ struct FavoritesView: View {
             }
         }
         .padding(.horizontal, 16).padding(.top, 14)
+    }
+
+    private var folderChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(account.displayFolders) { folder in
+                    Button {
+                        Task { await account.switchFolder(folder.id) }
+                    } label: {
+                        Text(folder.name)
+                            .font(.subheadline.weight(account.cloudFolderId == folder.id ? .bold : .regular))
+                            .padding(.horizontal, 12).padding(.vertical, 7)
+                            .background(account.cloudFolderId == folder.id ? accentPink : Color.white.opacity(0.08))
+                            .foregroundColor(account.cloudFolderId == folder.id ? .white : .primary)
+                            .cornerRadius(16)
+                    }
+                    .buttonStyle(.plain)
+                    .contextMenu {
+                        if folder.id != "0" {
+                            Button(role: .destructive) { folderToDelete = folder } label: {
+                                Label("删除收藏夹", systemImage: "trash")
+                            }
+                        }
+                    }
+                }
+                Button {
+                    newFolderName = ""
+                    showNewFolder = true
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "plus").font(.caption.weight(.bold))
+                        Text("新建").font(.subheadline)
+                    }
+                    .padding(.horizontal, 12).padding(.vertical, 7)
+                    .background(Color.white.opacity(0.08))
+                    .foregroundColor(accentPink)
+                    .cornerRadius(16)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 16)
+        }
+        .padding(.top, 12)
+        .alert("新建收藏夹", isPresented: $showNewFolder) {
+            TextField("收藏夹名称", text: $newFolderName)
+            Button("创建") { Task { await account.createFolder(name: newFolderName) } }
+            Button("取消", role: .cancel) {}
+        }
+        .confirmationDialog("删除收藏夹「\(folderToDelete?.name ?? "")」？",
+                            isPresented: Binding(get: { folderToDelete != nil },
+                                                 set: { if !$0 { folderToDelete = nil } }),
+                            titleVisibility: .visible) {
+            Button("删除", role: .destructive) {
+                if let f = folderToDelete { Task { await account.deleteFolder(id: f.id) } }
+                folderToDelete = nil
+            }
+            Button("取消", role: .cancel) { folderToDelete = nil }
+        }
     }
 
     private var accountHeader: some View {
@@ -1048,6 +1134,22 @@ struct DetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
+                if asComic != nil, account.isLoggedIn {
+                    Menu {
+                        ForEach(account.displayFolders) { f in
+                            Button {
+                                Task { await favToFolder(f.id) }
+                            } label: {
+                                Label("收藏到「\(f.name)」", systemImage: "folder")
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "folder")
+                    }
+                    .disabled(favBusy)
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
                 if asComic != nil {
                     Button {
                         Task { await toggleFav() }
@@ -1076,6 +1178,25 @@ struct DetailView: View {
         } else {
             library.toggleFavorite(comic)
         }
+    }
+
+    /// Favorite (or re-file) this album into a specific folder.
+    private func favToFolder(_ folderId: String) async {
+        guard let comic = asComic, account.isLoggedIn, !favBusy else { return }
+        favBusy = true
+        defer { favBusy = false }
+        do {
+            if !cloudFav {
+                try await JMClient.shared.addFavorite(albumId: comic.id)
+                cloudFav = true
+                if folderId != "0" {
+                    try await JMClient.shared.favoriteFolderMove(albumId: comic.id, folderId: folderId)
+                }
+            } else {
+                try await JMClient.shared.favoriteFolderMove(albumId: comic.id, folderId: folderId)
+            }
+            await account.applyFolderMove(aid: comic.id, toFolder: folderId)
+        } catch { /* leave state */ }
     }
 
     private func header(_ d: AlbumDetail) -> some View {
@@ -1398,6 +1519,378 @@ struct ProfileStatsCard: View {
     }
 }
 
+// MARK: - settings (个人 page, gear at top right)
+
+struct SettingsView: View {
+    @EnvironmentObject var blockStore: BlockTagStore
+    @AppStorage("settings.autoCheckIn") private var autoCheckIn = true
+    @State private var storageBytes: Int64?
+    @State private var apiModeText = "自动"
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 14) {
+                VStack(spacing: 0) {
+                    HStack(spacing: 12) {
+                        Image(systemName: "calendar.badge.checkmark")
+                            .foregroundColor(accentPink)
+                            .frame(width: 24)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("自动签到").foregroundColor(.primary)
+                            Text("每天第一次打开 App 时自动签到")
+                                .font(.caption).foregroundColor(.secondary)
+                        }
+                        Spacer()
+                        Toggle("", isOn: $autoCheckIn)
+                            .labelsHidden()
+                            .tint(accentPink)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    Divider().padding(.leading, 52)
+                    navRow(icon: "network", title: "线路设置", value: apiModeText) {
+                        LineSettingsView()
+                    }
+                    Divider().padding(.leading, 52)
+                    navRow(icon: "internaldrive", title: "存储空间",
+                           value: storageBytes.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) }) {
+                        StorageView()
+                    }
+                    Divider().padding(.leading, 52)
+                    navRow(icon: "eye.slash", title: "屏蔽标签",
+                           value: blockStore.blockedTags.isEmpty ? nil : "\(blockStore.blockedTags.count) 个") {
+                        BlockedTagsView()
+                    }
+                }
+                .padding(.vertical, 6)
+                .glassSurface(RoundedRectangle(cornerRadius: 20, style: .continuous))
+
+                Text("线路名单来自 JM 官方域名分发，只包含官方域名，不使用任何第三方镜像。")
+                    .font(.caption).foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 4)
+            }
+            .padding(16)
+        }
+        .navigationTitle("设置")
+        .navigationBarTitleDisplayMode(.inline)
+        .task {
+            if let manual = LineStore.shared.manualAPIHost,
+               let line = LineStore.shared.apiLines().first(where: { $0.host == manual }) {
+                apiModeText = line.name.isEmpty ? manual : line.name
+            } else {
+                apiModeText = "自动"
+            }
+            storageBytes = await Task.detached {
+                ImagePipe.shared.diskCacheUsage().bytes + DownloadedStore.diskUsage().bytes
+            }.value
+        }
+    }
+
+    private func navRow<Dest: View>(icon: String, title: String, value: String?,
+                                    @ViewBuilder dest: () -> Dest) -> some View {
+        NavigationLink {
+            dest()
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .foregroundColor(accentPink)
+                    .frame(width: 24)
+                Text(title).foregroundColor(.primary)
+                Spacer()
+                if let value {
+                    Text(value).font(.subheadline).foregroundColor(.secondary)
+                }
+                Image(systemName: "chevron.right")
+                    .font(.caption).foregroundColor(.secondary)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - line (domain) settings
+
+struct LineSettingsView: View {
+    @State private var apiLines: [APILine] = []
+    @State private var imgHosts: [String] = []
+    @State private var manualAPI: String?
+    @State private var manualIMG: String?
+    @State private var apiMs: [String: Int] = [:]
+    @State private var imgMs: [String: Int] = [:]
+    @State private var apiFailed: Set<String> = []
+    @State private var imgFailed: Set<String> = []
+    @State private var testing = false
+    @State private var refreshing = false
+    @State private var refreshedText = ""
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 14) {
+                sectionCard(
+                    title: "API 线路",
+                    subtitle: "接口域名，决定搜索、详情、收藏等请求走哪条线"
+                ) {
+                    autoRow(isManual: manualAPI == nil) {
+                        LineStore.shared.manualAPIHost = nil
+                        manualAPI = nil
+                    }
+                    ForEach(apiLines, id: \.host) { line in
+                        Divider().padding(.leading, 52)
+                        lineRow(
+                            title: line.name.isEmpty ? line.host : line.name,
+                            sub: line.name.isEmpty ? nil : line.host,
+                            ms: apiMs[line.host],
+                            failed: apiFailed.contains(line.host),
+                            selected: manualAPI == line.host,
+                            fastest: apiMs.values.min() == apiMs[line.host] && apiMs[line.host] != nil
+                        ) {
+                            LineStore.shared.manualAPIHost = line.host
+                            manualAPI = line.host
+                        }
+                    }
+                }
+
+                sectionCard(
+                    title: "图片线路",
+                    subtitle: "封面与漫画页的图片 CDN，决定图片加载速度"
+                ) {
+                    autoRow(isManual: manualIMG == nil) {
+                        LineStore.shared.manualIMGHost = nil
+                        manualIMG = nil
+                    }
+                    ForEach(imgHosts, id: \.self) { host in
+                        Divider().padding(.leading, 52)
+                        lineRow(
+                            title: host,
+                            sub: nil,
+                            ms: imgMs[host],
+                            failed: imgFailed.contains(host),
+                            selected: manualIMG == host,
+                            fastest: imgMs.values.min() == imgMs[host] && imgMs[host] != nil
+                        ) {
+                            LineStore.shared.manualIMGHost = host
+                            manualIMG = host
+                        }
+                    }
+                }
+
+                Button {
+                    Task { await testAll() }
+                } label: {
+                    HStack {
+                        Spacer()
+                        if testing { ProgressView() }
+                        else { Text("全部测速") }
+                        Spacer()
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(accentPink)
+                }
+                .disabled(testing)
+                .padding(.vertical, 13)
+                .glassSurface(RoundedRectangle(cornerRadius: 20, style: .continuous))
+
+                HStack(spacing: 8) {
+                    Text(refreshedText)
+                        .font(.caption).foregroundColor(.secondary)
+                    Spacer()
+                    Button {
+                        Task { await refreshList() }
+                    } label: {
+                        if refreshing { ProgressView() }
+                        else { Text("刷新线路名单").font(.caption.weight(.semibold)) }
+                    }
+                    .disabled(refreshing)
+                    .tint(accentPink)
+                }
+                .padding(.horizontal, 4)
+
+                Text("自动模式下所有线路同时竞速，用最快的那条；手动指定后优先走选中的线路，挂了会自动回退到其他线路。测速结果只用来参考，延迟低不等于一定更稳。")
+                    .font(.caption).foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 4)
+            }
+            .padding(16)
+        }
+        .navigationTitle("线路设置")
+        .navigationBarTitleDisplayMode(.inline)
+        .task {
+            reload()
+            await LineStore.shared.refreshIfStale()
+            reload()
+        }
+    }
+
+    private func sectionCard<Content: View>(title: String, subtitle: String,
+                                            @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.headline)
+                Text(subtitle).font(.caption).foregroundColor(.secondary)
+            }
+            .padding(.horizontal, 4)
+            VStack(spacing: 0) { content() }
+                .padding(.vertical, 6)
+                .glassSurface(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        }
+    }
+
+    private func autoRow(isManual: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: "bolt.fill")
+                    .foregroundColor(accentPink)
+                    .frame(width: 24)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("自动").foregroundColor(.primary)
+                    Text("全部线路竞速，用最快的")
+                        .font(.caption).foregroundColor(.secondary)
+                }
+                Spacer()
+                if isManual {
+                    Image(systemName: "checkmark.circle.fill").foregroundColor(accentPink)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func lineRow(title: String, sub: String?, ms: Int?, failed: Bool,
+                         selected: Bool, fastest: Bool,
+                         action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: "antenna.radiowaves.left.and.right")
+                    .foregroundColor(.secondary)
+                    .frame(width: 24)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).foregroundColor(.primary)
+                        .lineLimit(1)
+                    if let sub {
+                        Text(sub).font(.caption).foregroundColor(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer()
+                if testing && ms == nil && !failed {
+                    ProgressView()
+                } else if let ms {
+                    Text("\(ms) ms")
+                        .font(.subheadline.weight(fastest ? .bold : .regular))
+                        .foregroundColor(fastest ? accentPink : .secondary)
+                } else if failed {
+                    Text("超时").font(.subheadline).foregroundColor(.red)
+                } else {
+                    Text("未测").font(.subheadline).foregroundColor(.secondary)
+                }
+                if selected {
+                    Image(systemName: "checkmark.circle.fill").foregroundColor(accentPink)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func reload() {
+        apiLines = LineStore.shared.apiLines()
+        imgHosts = LineStore.shared.imgHosts()
+        manualAPI = LineStore.shared.manualAPIHost
+        manualIMG = LineStore.shared.manualIMGHost
+        if let date = LineStore.shared.refreshedAt() {
+            let f = DateFormatter()
+            f.dateFormat = "MM-dd HH:mm"
+            refreshedText = "名单更新于 \(f.string(from: date))"
+        } else {
+            refreshedText = "名单尚未联网更新（使用内置官方域名）"
+        }
+    }
+
+    private func refreshList() async {
+        refreshing = true
+        defer { refreshing = false }
+        await LineStore.shared.refreshIfStale(force: true)
+        reload()
+    }
+
+    private func testAll() async {
+        testing = true
+        defer { testing = false }
+        apiMs = [:]; imgMs = [:]; apiFailed = []; imgFailed = []
+        let lines = apiLines
+        let hosts = imgHosts
+        await withTaskGroup(of: Void.self) { group in
+            for line in lines {
+                group.addTask {
+                    let ms = await LineStore.measureAPI(host: line.host)
+                    await MainActor.run {
+                        if let ms { apiMs[line.host] = ms } else { apiFailed.insert(line.host) }
+                    }
+                }
+            }
+            for host in hosts {
+                group.addTask {
+                    let ms = await LineStore.measureIMG(host: host)
+                    await MainActor.run {
+                        if let ms { imgMs[host] = ms } else { imgFailed.insert(host) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - auto daily check-in
+
+enum AutoCheckIn {
+    private static var todayKey: String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd"
+        return f.string(from: Date())
+    }
+
+    static var todayNotice: String? {
+        let d = UserDefaults.standard
+        guard d.string(forKey: "autoCheckin.noticeDay") == todayKey else { return nil }
+        return d.string(forKey: "autoCheckin.notice")
+    }
+
+    /// Runs once per day on launch / login change: if today's check-in is
+    /// still open, sign it and remember the reward for the profile card.
+    /// A failed attempt leaves the day unset so the next launch retries.
+    @MainActor
+    static func runIfNeeded(account: AccountStore) async {
+        let d = UserDefaults.standard
+        let enabled = d.object(forKey: "settings.autoCheckIn") as? Bool ?? true
+        guard enabled, account.isLoggedIn, let uid = AccountStore.currentUserId else { return }
+        guard d.string(forKey: "autoCheckin.day") != todayKey else { return }
+        guard let info = try? await JMClient.shared.dailyInfo(userId: uid) else { return }
+        if info.todaySigned {
+            d.set(todayKey, forKey: "autoCheckin.day")
+            return
+        }
+        do {
+            let reward = try await JMClient.shared.dailyCheck(userId: uid, dailyId: info.dailyId)
+            account.applyCheckinReward(reward)
+            d.set(todayKey, forKey: "autoCheckin.day")
+            d.set("今日已自动签到\(reward.isEmpty ? "" : "：\(reward)")", forKey: "autoCheckin.notice")
+            d.set(todayKey, forKey: "autoCheckin.noticeDay")
+        } catch {
+            // leave the day unset; next launch retries
+        }
+    }
+}
+
 // MARK: - daily check-in card (个人 page)
 
 struct CheckinCard: View {
@@ -1448,6 +1941,8 @@ struct CheckinCard: View {
                 }
                 if let notice {
                     Text(notice).font(.caption).foregroundColor(accentPink)
+                } else if info.todaySigned, let auto = AutoCheckIn.todayNotice {
+                    Text(auto).font(.caption).foregroundColor(.secondary)
                 }
             } else if loading {
                 HStack { Spacer(); ProgressView(); Spacer() }

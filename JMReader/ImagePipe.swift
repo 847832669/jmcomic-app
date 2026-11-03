@@ -6,14 +6,11 @@ import ImageIO
 final class ImagePipe {
     static let shared = ImagePipe()
 
-    static let imageHosts = [
-        "cdn-msp2.jmapiproxy1.cc",
-        "cdn-msp3.jmapiproxy1.cc",
-        "cdn-msp3.jmapiproxy3.cc",
-    ]
+    /// Built-in fallback order; the live pool is managed by LineStore.
+    static var imageHosts: [String] { LineStore.builtinIMG }
 
     static func coverURLString(albumId: String) -> String {
-        "https://\(imageHosts[0])/media/albums/\(albumId)_3x4.jpg"
+        "https://\(LineStore.shared.imgHosts().first ?? imageHosts[0])/media/albums/\(albumId)_3x4.jpg"
     }
     static func coverPath(albumId: String) -> String { "/media/albums/\(albumId)_3x4.jpg" }
     static func pagePath(chapterId: String, file: String) -> String { "/media/photos/\(chapterId)/\(file)" }
@@ -34,6 +31,15 @@ final class ImagePipe {
         try? FileManager.default.createDirectory(at: diskDir, withIntermediateDirectories: true)
         memCache.countLimit = 160
         memCache.totalCostLimit = 96 * 1024 * 1024
+    }
+
+    /// Manual pin first, then last-good order, then any pool hosts not tried yet.
+    private func tryOrder() -> [String] {
+        var order: [String] = []
+        if let manual = LineStore.shared.manualIMGHost { order.append(manual) }
+        for h in hostOrder where !order.contains(h) { order.append(h) }
+        for h in LineStore.shared.imgHosts() where !order.contains(h) { order.append(h) }
+        return order
     }
 
     /// Disk usage of the image cache (Caches/JMImages), for the storage page.
@@ -86,7 +92,7 @@ final class ImagePipe {
         if let data = try? Data(contentsOf: fileURL), let img = Self.decode(data, targetWidth: targetWidth) {
             raw = img
         } else {
-            for host in hostOrder {
+            for host in tryOrder() {
                 guard let url = URL(string: "https://\(host)\(path)") else { continue }
                 var req = URLRequest(url: url)
                 req.timeoutInterval = 15

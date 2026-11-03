@@ -57,6 +57,12 @@ struct PromoSection: Identifiable {
     }
 }
 
+/// One cloud favorites folder (`folder_list` entry in the favorite response).
+struct FavFolder: Identifiable, Codable, Hashable {
+    var id: String   // FID; "0" is the default folder
+    var name: String
+}
+
 struct JMCategory: Identifiable, Hashable {
     var id: String
     var name: String

@@ -27,6 +27,10 @@ struct JMReaderApp: App {
             }
             .tint(accentPink)
             .tabMinimizeOnScroll()
+            .task(id: account.username) {
+                await AutoCheckIn.runIfNeeded(account: account)
+                await LineStore.shared.refreshIfStale()
+            }
             .environmentObject(appState)
             .environmentObject(library)
             .environmentObject(history)
