@@ -156,19 +156,31 @@ final class AccountStore: ObservableObject {
 
     var cloudFullyLoaded: Bool { cloudTotal > 0 && cloudFavorites.count >= cloudTotal }
 
+    private var persistScheduled = false
+
+    /// Encoding a 1000+ item snapshot on the main thread was part of the
+    /// profile-page hitch: encode detached, and coalesce bursts (paging
+    /// calls this per page) into one write with the latest state.
     private func persistCloudSnapshot() {
-        guard let owner = cloudOwner else { return }
+        guard let owner = cloudOwner, !persistScheduled else { return }
+        persistScheduled = true
         let snap = CloudFavSnapshot(owner: owner, total: cloudTotal, pages: cloudPage,
                                     pageSize: cloudPageSize, items: cloudFavorites)
-        if let data = try? JSONEncoder().encode(snap) {
-            UserDefaults.standard.set(data, forKey: cloudKey)
+        let key = cloudKey
+        Task.detached(priority: .utility) {
+            if let data = try? JSONEncoder().encode(snap) {
+                UserDefaults.standard.set(data, forKey: key)
+            }
+            await MainActor.run { [weak self] in self?.persistScheduled = false }
         }
     }
 
-    private func hydrateCloudFromDisk() {
-        guard let data = UserDefaults.standard.data(forKey: cloudKey),
-              let snap = try? JSONDecoder().decode(CloudFavSnapshot.self, from: data),
-              snap.owner == username else { return }
+    private func hydrateCloudFromDisk() async {
+        guard let data = UserDefaults.standard.data(forKey: cloudKey) else { return }
+        let snap = await Task.detached(priority: .userInitiated) {
+            try? JSONDecoder().decode(CloudFavSnapshot.self, from: data)
+        }.value
+        guard let snap, snap.owner == username else { return }
         cloudFavorites = snap.items
         cloudTotal = snap.total
         cloudPage = snap.pages
@@ -182,18 +194,52 @@ final class AccountStore: ObservableObject {
         if cloudOwner != username {
             cloudOwner = username
             cloudFavorites = []; cloudPage = 0; cloudTotal = 0; cloudPageSize = 0
-            hydrateCloudFromDisk()
+            await hydrateCloudFromDisk()
         }
         if cloudFavorites.isEmpty {
             await loadCloudPage()
         } else {
-            await validateCloudCache()
+            await reconcileCloudCache()
         }
     }
 
-    private func validateCloudCache() async {
+    /// Cache check that does NOT nuke the whole cache on any change.
+    /// The old validate cleared everything whenever the newest favorite
+    /// or the total moved — for an active account that meant a full
+    /// 55-page refetch on most profile visits, which is exactly the
+    /// heavy path behind the intermittent profile freezes. Now:
+    /// additions at the front are prepended after a short overlap walk,
+    /// and only a SHRINK (unfavorited elsewhere) falls back to a reload.
+    private func reconcileCloudCache() async {
         guard let res = try? await JMClient.shared.favorites(page: 1) else { return }
-        if res.total != cloudTotal || res.items.first?.id != cloudFavorites.first?.id {
+        if res.total == cloudTotal && res.items.first?.id == cloudFavorites.first?.id {
+            return // cache is fresh
+        }
+        if res.total < cloudFavorites.count {
+            cloudFavorites = []; cloudPage = 0; cloudTotal = 0; cloudPageSize = 0
+            await loadCloudPage()
+            return
+        }
+        var fresh: [Comic] = []
+        var pageItems = res.items
+        var overlapped = false
+        for page in 1...3 {
+            if page > 1 {
+                guard let next = try? await JMClient.shared.favorites(page: page) else { break }
+                pageItems = next.items
+            }
+            for item in pageItems {
+                if item.id == cloudFavorites.first?.id { overlapped = true; break }
+                fresh.append(item)
+            }
+            if overlapped { break }
+        }
+        if overlapped {
+            cloudFavorites = fresh + cloudFavorites
+            cloudTotal = res.total
+            syncFavoritesCount(res.total)
+            persistCloudSnapshot()
+        } else {
             cloudFavorites = []; cloudPage = 0; cloudTotal = 0; cloudPageSize = 0
             await loadCloudPage()
         }
@@ -230,16 +276,24 @@ final class AccountStore: ObservableObject {
         let totalPages = Int(ceil(Double(cloudTotal) / Double(cloudPageSize)))
         let remaining = Array((cloudPage + 1)...totalPages)
         guard !remaining.isEmpty else { return }
-        let fetched = await withTaskGroup(of: (Int, [Comic]).self, returning: [Int: [Comic]].self) { group in
-            for p in remaining {
-                group.addTask {
-                    let r = try? await JMClient.shared.favorites(page: p)
-                    return (p, r?.items ?? [])
+        // Fetch in waves of 8 pages: firing all ~54 remaining pages at
+        // once bursts the network stack and the decrypt queue, and the
+        // stall that follows lands right on the profile page.
+        var fetched: [Int: [Comic]] = [:]
+        for waveStart in stride(from: 0, to: remaining.count, by: 8) {
+            let wave = Array(remaining[waveStart..<min(waveStart + 8, remaining.count)])
+            let waveResult = await withTaskGroup(of: (Int, [Comic]).self, returning: [Int: [Comic]].self) { group in
+                for p in wave {
+                    group.addTask {
+                        let r = try? await JMClient.shared.favorites(page: p)
+                        return (p, r?.items ?? [])
+                    }
                 }
+                var out: [Int: [Comic]] = [:]
+                for await (p, items) in group { out[p] = items }
+                return out
             }
-            var out: [Int: [Comic]] = [:]
-            for await (p, items) in group { out[p] = items }
-            return out
+            fetched.merge(waveResult) { _, new in new }
         }
         // Merge into a LOCAL array and publish ONCE. Appending item-by-item
         // fired objectWillChange per comic (~1000 publishes for a big
