@@ -1183,7 +1183,8 @@ struct DetailView: View {
 
     /// Favorite (or re-file) this album into a specific folder.
     private func favToFolder(_ folderId: String) async {
-        guard let comic = asComic, account.isLoggedIn, !favBusy else { return }
+        guard let comic = asComic, account.isLoggedIn, !favBusy,
+              !folderId.hasPrefix("pending-") else { return }
         favBusy = true
         defer { favBusy = false }
         do {

@@ -226,20 +226,52 @@ final class AccountStore: ObservableObject {
     func createFolder(name: String) async {
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return }
+        // Optimistic: show the folder right away under a pending id. The
+        // favorites endpoint can serve a stale folder_list for a few
+        // seconds after a write (a created folder only showed up after
+        // leaving and re-entering the page), so poll until the real
+        // folder (with its server id) shows up and swap the placeholder.
+        let pendingId = "pending-" + UUID().uuidString
+        cloudFolders.append(FavFolder(id: pendingId, name: name))
         do {
             try await JMClient.shared.favoriteFolderAdd(name: name)
-            await refreshFolderList()
-        } catch { /* surface nothing; list simply stays unchanged */ }
+        } catch {
+            cloudFolders.removeAll { $0.id == pendingId }
+            return
+        }
+        for _ in 0..<5 {
+            if let res = try? await JMClient.shared.favorites(page: 1, folderId: "0"),
+               res.folders.contains(where: { $0.name == name }) {
+                cloudFolders = res.folders
+                return
+            }
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+        }
+        cloudFolders.removeAll { $0.id == pendingId }
+        await refreshFolderList()
     }
 
     func deleteFolder(id: String) async {
         guard id != "0" else { return }
+        // Optimistic removal, same stale-read problem as create.
+        let backup = cloudFolders
+        cloudFolders.removeAll { $0.id == id }
+        folderItems[id] = nil; folderTotals[id] = nil; folderPages[id] = nil
+        if cloudFolderId == id { cloudFolderId = "0" }
         do {
             try await JMClient.shared.favoriteFolderDelete(folderId: id)
-            folderItems[id] = nil; folderTotals[id] = nil; folderPages[id] = nil
-            if cloudFolderId == id { cloudFolderId = "0" }
-            await refreshFolderList()
-        } catch { /* keep state */ }
+        } catch {
+            cloudFolders = backup
+            return
+        }
+        for _ in 0..<3 {
+            if let res = try? await JMClient.shared.favorites(page: 1, folderId: "0"),
+               !res.folders.contains(where: { $0.id == id }) {
+                cloudFolders = res.folders
+                return
+            }
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+        }
     }
 
     private func refreshFolderList() async {
@@ -249,6 +281,7 @@ final class AccountStore: ObservableObject {
     }
 
     func moveFavorite(aid: String, toFolder: String) async {
+        guard !toFolder.hasPrefix("pending-") else { return }
         do {
             try await JMClient.shared.favoriteFolderMove(albumId: aid, folderId: toFolder)
             await applyFolderMove(aid: aid, toFolder: toFolder)
