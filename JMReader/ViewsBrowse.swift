@@ -749,6 +749,12 @@ struct FavoritesView: View {
     @State private var showLogin = false
     @State private var favQuery = ""
     @State private var storageBytes: Int64?
+    // Render window for the cloud grid: the whole favorites list lives in
+    // memory, but building all ~1000 cells the moment the profile page
+    // opens (nested grid inside a VStack scroll view can go eager, and a
+    // cold start is already busy with the home feed) froze the page on
+    // entry. Only the first window of cells is built; scrolling grows it.
+    @State private var cloudRenderLimit = 60
     @AppStorage("jm.favSortNewest") private var sortNewest = true
 
     var body: some View {
@@ -768,7 +774,13 @@ struct FavoritesView: View {
                             Text(favQuery.isEmpty ? "账号里还没有收藏" : "没有匹配的收藏").foregroundColor(.secondary)
                                 .padding(.horizontal, 16)
                         } else {
-                            ComicGrid(items: shownCloud) { Task { await account.loadCloudPage() } }
+                            ComicGrid(items: shownCloudWindow) {
+                                if cloudRenderLimit < shownCloud.count {
+                                    cloudRenderLimit += 60
+                                } else {
+                                    Task { await account.loadCloudPage() }
+                                }
+                            }
                         }
                         if account.cloudLoading { ProgressView().padding() }
                     }
@@ -802,6 +814,8 @@ struct FavoritesView: View {
             .task(id: sortNewest) {
                 if !sortNewest { await account.loadAllCloud() }
             }
+            .onChange(of: favQuery) { _ in cloudRenderLimit = 60 }
+            .onChange(of: sortNewest) { _ in cloudRenderLimit = 60 }
         }
     }
 
@@ -891,6 +905,10 @@ struct FavoritesView: View {
         // 只在全部加载完后才反转，半截数据反转必然是乱的
         if !sortNewest && account.cloudFullyLoaded { r.reverse() }
         return r
+    }
+
+    private var shownCloudWindow: [Comic] {
+        Array(shownCloud.prefix(cloudRenderLimit))
     }
 
     private var shownLocal: [Comic] {
