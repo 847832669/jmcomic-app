@@ -65,7 +65,9 @@ final class AccountStore: ObservableObject {
     struct Auth { let jwt: String; let avs: String }
 
     /// Read by the API client on every request; nil when signed out.
-    static var currentAuth: Auth? {
+    /// nonisolated: it only reads the keychain, and the API client calls
+    /// it from background queues on every request.
+    nonisolated static var currentAuth: Auth? {
         guard let jwt = Keychain.get("jwttoken"), !jwt.isEmpty else { return nil }
         return Auth(jwt: jwt, avs: Keychain.get("avs") ?? "")
     }
@@ -73,7 +75,7 @@ final class AccountStore: ObservableObject {
     var isLoggedIn: Bool { username != nil }
 
     /// The member id, decoded from the stored login token (SESSION.uid).
-    static var currentUserId: Int? {
+    nonisolated static var currentUserId: Int? {
         guard let jwt = Keychain.get("jwttoken") else { return nil }
         let parts = jwt.split(separator: ".")
         guard parts.count == 3 else { return nil }
