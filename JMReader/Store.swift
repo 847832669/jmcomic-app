@@ -38,6 +38,15 @@ enum Keychain {
     }
 }
 
+/// Main-actor isolated: this store's @Published state must only ever be
+/// mutated on the main thread. Its async helpers used to run on the
+/// cooperative pool (non-isolated async funcs don't inherit the caller's
+/// actor), so entering the profile page at cold start published from a
+/// background thread while SwiftUI's view graph waited on the main
+/// thread and the main thread waited on the publisher lock — a
+/// three-way deadlock the FRONTBOARD watchdog killed (0x8BADF00D,
+/// logs 2026-11-03 16:16 & 16:55).
+@MainActor
 final class AccountStore: ObservableObject {
     @Published private(set) var username: String?
     @Published private(set) var stats: MemberStats?
@@ -115,7 +124,6 @@ final class AccountStore: ObservableObject {
         saveStats()
     }
 
-    @MainActor
     func signIn(username: String, password: String) async throws {
         let info = try await JMClient.shared.login(username: username, password: password)
         let jwt = anyString(info["jwttoken"])
@@ -245,7 +253,6 @@ final class AccountStore: ObservableObject {
         }
     }
 
-    @MainActor
     func loadCloudPage() async {
         guard !cloudLoading, isLoggedIn else { return }
         if !cloudFavorites.isEmpty && cloudFullyLoaded { return }
@@ -264,7 +271,6 @@ final class AccountStore: ObservableObject {
     }
 
     /// Load every remaining page CONCURRENTLY (sequential paging was the slow part).
-    @MainActor
     func loadAllCloud() async {
         // Two view tasks can ask for this at once; overlapping runs used to
         // interleave their mutations of the published favorites array.
@@ -485,6 +491,10 @@ final class SearchHistory: ObservableObject {
 /// endpoints return no tags, so tags are learned from detail fetches
 /// (opening a detail page, plus background prefetch from lists) and kept
 /// in a persisted cache. Favorites and history are never filtered.
+/// Main-actor isolated for the same reason as AccountStore: prefetch
+/// learned tags in a background task and published them off the main
+/// thread, which is one of the three parties in the profile deadlock.
+@MainActor
 final class BlockTagStore: ObservableObject {
     @Published private(set) var blockedTags: [String] = []
     @Published private(set) var tagCache: [String: [String]] = [:]
