@@ -27,6 +27,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import coil.imageLoader
@@ -288,14 +289,30 @@ fun FavoritesSection(router: Router, account: AccountStore, library: LibraryStor
                 if (folders.none { it.fid == folderId }) folderId = "0"
                 account.syncFavCount(total)
                 onCloudTotal()
+                // Publish page 1 immediately, then append page by page. The old
+                // all-or-nothing loop discarded EVERYTHING when one of the ~20
+                // serial page requests failed on a flaky direct connection
+                // (426 favorites = 22 pages), and its 15-page cap silently
+                // truncated big collections to 300 items.
                 var all = first
-                val pages = ((total + 19) / 20).coerceAtMost(15)
-                for (p in 2..pages) {
-                    val (_, more, _) = JmApi.favorites(p, folderId)
-                    if (more.isEmpty()) break
-                    all = all + more
-                }
                 cloud = all
+                var page = 2
+                var incomplete = false
+                while (all.size < total && page <= 100) {
+                    var more: List<JmApi.Album>? = null
+                    for (attempt in 0..1) {
+                        try { more = JmApi.favorites(page, folderId).second; break }
+                        catch (e: Exception) {
+                            if (attempt == 1) incomplete = true else delay(400)
+                        }
+                    }
+                    val m = more ?: break
+                    if (m.isEmpty()) break
+                    all = all + m
+                    cloud = all
+                    page++
+                }
+                if (incomplete) msg = "部分收藏没加载完，点「云端」标签可继续重试"
             } catch (e: Exception) { msg = "云端收藏加载失败，点「云端」标签可重试" }
         }
     }
