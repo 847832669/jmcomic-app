@@ -235,7 +235,15 @@ object JmApi {
         return Triple(d.optInt("total"), parseAlbums(d.optJSONArray("list")), folders)
     }
 
-    suspend fun addFavorite(aid: String) { callForm("favorite", mapOf("aid" to aid)) }
+    /** The favorite endpoint is a TOGGLE (verified live 2026-11-05): every
+     * POST flips the server-side state and the response `type` reports what
+     * actually happened ("add" / "remove"). Returns the state after the call. */
+    suspend fun toggleFavorite(aid: String): Boolean {
+        val d = callForm("favorite", mapOf("aid" to aid))
+        val t = d.optString("type")
+        if (t.isEmpty()) throw ApiException("收藏接口返回异常")
+        return t == "add"
+    }
 
     suspend fun folderAdd(name: String) {
         callForm("favorite_folder", mapOf("type" to "add", "folder_name" to name))

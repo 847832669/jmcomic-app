@@ -325,7 +325,7 @@ fun FavoritesSection(router: Router, account: AccountStore, library: LibraryStor
                 // serial page requests failed on a flaky direct connection
                 // (426 favorites = 22 pages), and its 15-page cap silently
                 // truncated big collections to 300 items.
-                var all = first
+                var all = first.filter { !RemovedFavs.contains(it.id) }
                 cloud = all
                 var page = 2
                 var incomplete = false
@@ -339,7 +339,7 @@ fun FavoritesSection(router: Router, account: AccountStore, library: LibraryStor
                     }
                     val m = more ?: break
                     if (m.isEmpty()) break
-                    all = all + m
+                    all = all + m.filter { !RemovedFavs.contains(it.id) }
                     cloud = all
                     page++
                 }
@@ -572,8 +572,13 @@ fun DetailScreen(dest: DetailDest, router: Router, account: AccountStore, librar
             if (aa is org.json.JSONArray) for (i in 0 until aa.length()) al.add(aa.optString(i))
             else if (aa is String && aa.isNotEmpty()) al.add(aa)
             BlockTags.remember(dest.id, tl, al)
+            if (account.isLoggedIn) {
+                val cf = dd.optInt("is_favorite") != 0
+                if (cf) RemovedFavs.clear(dest.id)
+                fav = cf
+            }
         } catch (e: Exception) { error = e.message }
-        fav = library.isFavorite(dest.id)
+        if (!account.isLoggedIn) fav = library.isFavorite(dest.id)
     }
     Column(Modifier.fillMaxSize()) {
         TopBar(title = "详情") { router.pop() }
@@ -635,7 +640,20 @@ fun DetailScreen(dest: DetailDest, router: Router, account: AccountStore, librar
                             shape = RoundedCornerShape(14.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = Pink)) { Text("开始阅读", color = Color.White) }
                         OutlinedButton(onClick = {
-                            if (fav) { library.removeFavorite(dest.id); fav = false; toast = "已取消本地收藏" }
+                            if (fav && account.isLoggedIn) {
+                                scope.launch {
+                                    try {
+                                        val now = JmApi.toggleFavorite(dest.id)
+                                        fav = now
+                                        if (!now) {
+                                            RemovedFavs.add(dest.id)
+                                            library.removeFavorite(dest.id)
+                                            toast = "已取消收藏"
+                                        } else toast = "已收藏"
+                                    } catch (e: Exception) { toast = "操作失败：${e.message}" }
+                                }
+                            }
+                            else if (fav) { library.removeFavorite(dest.id); fav = false; toast = "已取消本地收藏" }
                             else if (account.isLoggedIn) {
                                 scope.launch {
                                     try {
@@ -667,7 +685,11 @@ fun DetailScreen(dest: DetailDest, router: Router, account: AccountStore, librar
                                             library.addFavorite(albumModel); fav = true
                                             scope.launch {
                                                 try {
-                                                    JmApi.addFavorite(dest.id)
+                                                    // Toggle endpoint: if the server already
+                                                    // had it, the first call removes it — flip back.
+                                                    var nowFav = JmApi.toggleFavorite(dest.id)
+                                                    if (!nowFav) nowFav = JmApi.toggleFavorite(dest.id)
+                                                    if (nowFav) { RemovedFavs.clear(dest.id); fav = true }
                                                     if (f.fid != "0") JmApi.folderMove(f.fid, dest.id)
                                                     toast = "已收藏到「${f.name}」"
                                                 } catch (e: Exception) { toast = "云端收藏失败：${e.message}" }

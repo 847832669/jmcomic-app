@@ -147,6 +147,40 @@ class HistoryStore(context: Context) {
     fun clear() { prefs.edit().remove("queries").apply() }
 }
 
+/** Albums unfavorited in-app, remembered for 7 days. The favorites hosts
+ * disagree for hours, so a fresh fetch can briefly serve a just-removed
+ * album again; while an id is in this map, cloud favorite lists skip it.
+ * Mirrors the iOS removedFavTombstones (iOS build 44). */
+object RemovedFavs {
+    private var prefs: SharedPreferences? = null
+    private val map = mutableMapOf<String, Long>()
+
+    fun init(context: Context) {
+        if (prefs != null) return
+        val p = context.getSharedPreferences("jm.removedfavs", Context.MODE_PRIVATE)
+        prefs = p
+        val obj = try { JSONObject(p.getString("map", "{}") ?: "{}") } catch (e: Exception) { JSONObject() }
+        val cutoff = System.currentTimeMillis() - 7L * 24 * 3600 * 1000
+        val keys = obj.keys()
+        while (keys.hasNext()) {
+            val k = keys.next()
+            val ts = obj.optLong(k, 0)
+            if (ts > cutoff) map[k] = ts
+        }
+    }
+
+    private fun persist() {
+        val p = prefs ?: return
+        val obj = JSONObject()
+        for ((k, v) in map) obj.put(k, v)
+        p.edit().putString("map", obj.toString()).apply()
+    }
+
+    fun add(id: String) { map[id] = System.currentTimeMillis(); persist() }
+    fun clear(id: String) { if (map.remove(id) != null) persist() }
+    fun contains(id: String): Boolean = map.containsKey(id)
+}
+
 /** Custom tag blocklist (mirrors the iOS BlockTagStore). Browse surfaces hide
  * albums whose title/author contains a blocked word, or — once their real
  * tags are known — whose detail tags contain a blocked tag. List endpoints
