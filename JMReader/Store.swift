@@ -94,9 +94,7 @@ final class AccountStore: ObservableObject {
            let st = try? JSONDecoder().decode(MemberStats.self, from: data) {
             stats = st
         }
-        if let saved = UserDefaults.standard.dictionary(forKey: tombstoneKey) as? [String: TimeInterval] {
-            deletedFolderTombstones = saved
-        }
+        if let user = username { loadTombstones(for: user) }
     }
 
     private func saveStats() {
@@ -138,6 +136,7 @@ final class AccountStore: ObservableObject {
         let name = anyString(info["username"]).isEmpty ? username : anyString(info["username"])
         Keychain.set("username", name)
         self.username = name
+        loadTombstones(for: name)
         var st = MemberStats()
         st.exp = anyInt(info["exp"])
         st.nextLevelExp = anyInt(info["nextLevelExp"])
@@ -179,27 +178,50 @@ final class AccountStore: ObservableObject {
     private var folderTotals: [String: Int] = [:]
     private var folderPages: [String: Int] = [:]
     private var folderLoading = false
-    /// Ids of folders deleted on this device, mapped to deletion time.
-    /// The favorites endpoint is raced across several API hosts whose
-    /// caches don't go stale in sync, so a just-deleted folder can keep
-    /// reappearing in folder_list for a while and noteFolders would
-    /// resurrect it. Tombstoned ids are filtered out of every server
-    /// list for a fixed lifetime (24h) — never lifted early, because
-    /// the hosts disagree for far too long for any single response
-    /// to prove the folder is gone everywhere. Persisted so an app
-    /// relaunch inside the stale window doesn't resurrect it either.
+    /// Ids of folders the user deleted, mapped to deletion time —
+    /// hidden locally for good. Two measured facts force this design
+    /// (live API probes, 2026-11-04):
+    /// 1. JM's folder delete is broken server-side: POST
+    ///    favorite_folder type=del returns envelope code 200 with a
+    ///    payload of {status: fail, msg: 未知錯誤請聯繫管理員} in
+    ///    every encoding/host/parameter variant tried. The delete
+    ///    POST is still sent (harmless if JM ever fixes it), but
+    ///    the local hide is the only deletion that actually works.
+    /// 2. The API hosts disagree about folder_list for 12+ hours,
+    ///    flip-flopping between responses, so no server response can
+    ///    ever prove a folder is gone — tombstones never expire.
+    /// Stored per account: folder ids are only unique per user, and
+    /// an account switch must neither leak nor wipe another
+    /// account's list. (Builds 36/37 got this wrong twice: the
+    /// tombstone was dropped on the first server list missing the
+    /// id, and ensureCloudCache wiped it on every cold start because
+    /// cloudOwner is memory-only.)
     private var deletedFolderTombstones: [String: TimeInterval] = [:]
-    private let tombstoneKey = "jm.deletedFolders.v1"
-    private static let tombstoneLifetime: TimeInterval = 86_400
 
-    private func saveTombstones() {
-        UserDefaults.standard.set(deletedFolderTombstones, forKey: tombstoneKey)
+    private func tombstoneKey(for user: String) -> String { "jm.deletedFolders.v2.\(user)" }
+
+    private func loadTombstones(for user: String) {
+        if let saved = UserDefaults.standard.dictionary(forKey: tombstoneKey(for: user)) as? [String: TimeInterval] {
+            deletedFolderTombstones = saved
+        } else if let legacy = UserDefaults.standard.dictionary(forKey: "jm.deletedFolders.v1") as? [String: TimeInterval] {
+            deletedFolderTombstones = legacy
+        } else {
+            deletedFolderTombstones = [:]
+        }
     }
 
-    private func clearTombstones() {
-        guard !deletedFolderTombstones.isEmpty else { return }
+    private func saveTombstones() {
+        guard let user = username else { return }
+        UserDefaults.standard.set(deletedFolderTombstones, forKey: tombstoneKey(for: user))
+    }
+
+    /// Sign-out only: forget the outgoing account's local deletions.
+    private func clearTombstones(for user: String?) {
         deletedFolderTombstones = [:]
-        UserDefaults.standard.removeObject(forKey: tombstoneKey)
+        if let user {
+            UserDefaults.standard.removeObject(forKey: tombstoneKey(for: user))
+        }
+        UserDefaults.standard.removeObject(forKey: "jm.deletedFolders.v1")
     }
 
     /// Folders as shown in pickers: the default folder always comes first.
@@ -219,22 +241,6 @@ final class AccountStore: ObservableObject {
     }
 
     private func noteFolders(_ folders: [FavFolder]) {
-        if !deletedFolderTombstones.isEmpty {
-            let now = Date().timeIntervalSince1970
-            let countBefore = deletedFolderTombstones.count
-            // Purely age-based pruning — a tombstone is never lifted
-            // early. Measured against the live API (2026-11-04): the
-            // hosts kept disagreeing about a deleted folder for 12+
-            // hours, flip-flopping between responses, so one host's
-            // list missing the id proves nothing; the next refresh
-            // may hit a host that still serves it (build 36 dropped
-            // the tombstone on first absence and the folder came
-            // straight back).
-            deletedFolderTombstones = deletedFolderTombstones.filter { _, ts in
-                now - ts < Self.tombstoneLifetime
-            }
-            if deletedFolderTombstones.count != countBefore { saveTombstones() }
-        }
         let visible = folders.filter { deletedFolderTombstones[$0.id] == nil }
         if !visible.isEmpty { cloudFolders = visible }
     }
@@ -398,7 +404,7 @@ final class AccountStore: ObservableObject {
             cloudFavorites = []; cloudPage = 0; cloudTotal = 0; cloudPageSize = 0
             cloudFolders = []; cloudFolderId = "0"
             folderItems = [:]; folderTotals = [:]; folderPages = [:]
-            clearTombstones()
+            if let user = username { loadTombstones(for: user) }
             await hydrateCloudFromDisk()
         }
         if cloudFavorites.isEmpty {
@@ -531,6 +537,7 @@ final class AccountStore: ObservableObject {
     }
 
     func signOut() {
+        let outgoing = username
         Keychain.remove("jwttoken")
         Keychain.remove("avs")
         Keychain.remove("username")
@@ -539,7 +546,7 @@ final class AccountStore: ObservableObject {
         cloudFavorites = []; cloudTotal = 0; cloudPage = 0; cloudPageSize = 0; cloudOwner = nil
         cloudFolders = []; cloudFolderId = "0"
         folderItems = [:]; folderTotals = [:]; folderPages = [:]
-        clearTombstones()
+        clearTombstones(for: outgoing)
         UserDefaults.standard.removeObject(forKey: cloudKey)
         UserDefaults.standard.removeObject(forKey: statsKey)
     }
