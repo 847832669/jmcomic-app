@@ -799,6 +799,7 @@ final class BlockTagStore: ObservableObject {
     @Published private(set) var blockedAuthors: [String] = []
     @Published private(set) var authorCache: [String: [String]] = [:]
     private var inFlight: Set<String> = []
+    private var persistTask: Task<Void, Never>?
 
     private let listKey = "jm.blockedTags.v1"
     private let cacheKey = "jm.tagCache.v1"
@@ -849,16 +850,42 @@ final class BlockTagStore: ObservableObject {
     /// Record tags/authors learned from an album detail fetch (empty is
     /// recorded too, so tag-less albums are not refetched forever).
     func remember(albumId: String, tags: [String], authors: [String]) {
-        if tagCache[albumId] != tags {
-            tagCache[albumId] = tags
-            if let data = try? JSONEncoder().encode(tagCache) {
-                UserDefaults.standard.set(data, forKey: cacheKey)
-            }
+        if apply(entries: [(albumId, tags, authors)]) { schedulePersist() }
+    }
+
+    /// Merge learned tags/authors into the caches; returns true when
+    /// anything actually changed (one publish per batch, not per album).
+    private func apply(entries: [(String, [String], [String])]) -> Bool {
+        var changed = false
+        for (id, tags, authors) in entries {
+            if tagCache[id] != tags { tagCache[id] = tags; changed = true }
+            if authorCache[id] != authors { authorCache[id] = authors; changed = true }
         }
-        if authorCache[albumId] != authors {
-            authorCache[albumId] = authors
-            if let data = try? JSONEncoder().encode(authorCache) {
-                UserDefaults.standard.set(data, forKey: authorCacheKey)
+        // tagCache/authorCache are two separate @Published properties, so a
+        // batch still publishes once per property — unavoidable here, but
+        // far better than the old per-album full re-encode + write below.
+        return changed
+    }
+
+    /// Persist the caches off the main actor, debounced: bursts of learned
+    /// albums (list prefetch) used to JSON-encode the whole cache and write
+    /// UserDefaults on the main thread for EVERY album, which visibly
+    /// stuttered scrolling after the v2.18 upgrade backfilled author data
+    /// for every previously cached album.
+    private func schedulePersist() {
+        persistTask?.cancel()
+        let tagsSnapshot = tagCache
+        let authorsSnapshot = authorCache
+        let tagsKey = cacheKey
+        let authorsKey = authorCacheKey
+        persistTask = Task.detached(priority: .utility) {
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            if Task.isCancelled { return }
+            if let data = try? JSONEncoder().encode(tagsSnapshot) {
+                UserDefaults.standard.set(data, forKey: tagsKey)
+            }
+            if let data = try? JSONEncoder().encode(authorsSnapshot) {
+                UserDefaults.standard.set(data, forKey: authorsKey)
             }
         }
     }
@@ -890,8 +917,14 @@ final class BlockTagStore: ObservableObject {
     /// tag-based filter applies to them here and on future visits.
     func prefetch(_ items: [Comic]) {
         guard !blockedTags.isEmpty || !blockedAuthors.isEmpty else { return }
-        let unknown = items.map(\.id).filter {
-            (tagCache[$0] == nil || authorCache[$0] == nil) && !inFlight.contains($0)
+        // Fetch only what an ACTIVE filter still needs: with no blocked
+        // authors, a missing authorCache must not trigger fetches (and the
+        // reverse) — otherwise every list appearance re-fetches the world.
+        let unknown = items.map(\.id).filter { id in
+            if inFlight.contains(id) { return false }
+            let needTags = !blockedTags.isEmpty && tagCache[id] == nil
+            let needAuthors = !blockedAuthors.isEmpty && authorCache[id] == nil
+            return needTags || needAuthors
         }
         guard !unknown.isEmpty else { return }
         let batch = Array(unknown.prefix(24))
@@ -913,9 +946,12 @@ final class BlockTagStore: ObservableObject {
                 // Remember fetched albums even when their tag/author lists are
                 // empty — otherwise they were re-fetched on every appearance.
                 // Failures (nil) stay uncached and retry another time.
-                for (id, tags, authors) in results {
-                    if let tags, let authors { self.remember(albumId: id, tags: tags, authors: authors) }
+                // Applied as ONE batch per chunk (see apply/schedulePersist).
+                let entries = results.compactMap { (id, tags, authors) -> (String, [String], [String])? in
+                    guard let tags, let authors else { return nil }
+                    return (id, tags, authors)
                 }
+                if self.apply(entries: entries) { self.schedulePersist() }
             }
             batch.forEach { self.inFlight.remove($0) }
         }

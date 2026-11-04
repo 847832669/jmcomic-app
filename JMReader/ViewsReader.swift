@@ -30,6 +30,7 @@ struct ReaderView: View {
     /// Chapters fetched ahead of time (the next-chapter preload fills this),
     /// so stepping to the next chapter doesn't wait on the network.
     @State private var chapterCache: [String: ChapterData] = [:]
+    @State private var preloadTask: Task<Void, Never>?
     @AppStorage("reader.mode") private var readerMode = "scroll"   // scroll | page
     @AppStorage("reader.rtl") private var readerRTL = false
 
@@ -71,6 +72,7 @@ struct ReaderView: View {
                 readingStats.addSeconds(10)
             }
         }
+        .onDisappear { preloadTask?.cancel() }
     }
 
     private var content: some View {
@@ -274,22 +276,26 @@ struct ReaderView: View {
         preloadNextChapter()
     }
 
-    /// Fetch the next chapter's data and warm the image cache for all of its
+    /// Fetch the next chapter's data and warm the image cache for its first
     /// pages while the user reads the current one, so "下一话" opens
-    /// instantly. Runs once per chapter (the cache check dedupes).
+    /// instantly. Only the first pages, loaded one at a time: warming the
+    /// whole chapter at once flooded the network and the image cache and
+    /// made the current chapter stutter (v2.18 build 40; throttled in 41).
     private func preloadNextChapter() {
         guard let idx = chapterIndex else { return }
         let nextIdx = idx + 1
         guard chapters.indices.contains(nextIdx) else { return }
         let nextId = chapters[nextIdx].id
         guard chapterCache[nextId] == nil else { return }
-        Task {
+        preloadTask?.cancel()
+        preloadTask = Task {
             guard let ch = try? await JMClient.shared.chapter(id: nextId) else { return }
             chapterCache[nextId] = ch
-            for file in ch.images {
+            for file in ch.images.prefix(6) {
+                if Task.isCancelled { return }
                 let stem = (file as NSString).deletingPathExtension
-                ImagePipe.shared.preload(path: ImagePipe.pagePath(chapterId: nextId, file: file),
-                                         scrambleNum: ImagePipe.splitNum(chapterId: nextId, stem: stem))
+                _ = await ImagePipe.shared.load(path: ImagePipe.pagePath(chapterId: nextId, file: file),
+                                                scrambleNum: ImagePipe.splitNum(chapterId: nextId, stem: stem))
             }
         }
     }
