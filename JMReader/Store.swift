@@ -184,12 +184,13 @@ final class AccountStore: ObservableObject {
     /// caches don't go stale in sync, so a just-deleted folder can keep
     /// reappearing in folder_list for a while and noteFolders would
     /// resurrect it. Tombstoned ids are filtered out of every server
-    /// list until a list agrees the folder is gone (or a safety
-    /// lifetime passes). Persisted so an app relaunch inside the
-    /// stale window doesn't resurrect the folder either.
+    /// list for a fixed lifetime (24h) — never lifted early, because
+    /// the hosts disagree for far too long for any single response
+    /// to prove the folder is gone everywhere. Persisted so an app
+    /// relaunch inside the stale window doesn't resurrect it either.
     private var deletedFolderTombstones: [String: TimeInterval] = [:]
     private let tombstoneKey = "jm.deletedFolders.v1"
-    private static let tombstoneLifetime: TimeInterval = 600
+    private static let tombstoneLifetime: TimeInterval = 86_400
 
     private func saveTombstones() {
         UserDefaults.standard.set(deletedFolderTombstones, forKey: tombstoneKey)
@@ -220,14 +221,17 @@ final class AccountStore: ObservableObject {
     private func noteFolders(_ folders: [FavFolder]) {
         if !deletedFolderTombstones.isEmpty {
             let now = Date().timeIntervalSince1970
-            let serverIds = Set(folders.map(\.id))
             let countBefore = deletedFolderTombstones.count
-            // Absent from this server list: the deletion propagated,
-            // drop the tombstone. Still listed but older than the
-            // safety lifetime: also drop it (never hide a folder
-            // forever on one device's say-so).
-            deletedFolderTombstones = deletedFolderTombstones.filter { id, ts in
-                serverIds.contains(id) && now - ts < Self.tombstoneLifetime
+            // Purely age-based pruning — a tombstone is never lifted
+            // early. Measured against the live API (2026-11-04): the
+            // hosts kept disagreeing about a deleted folder for 12+
+            // hours, flip-flopping between responses, so one host's
+            // list missing the id proves nothing; the next refresh
+            // may hit a host that still serves it (build 36 dropped
+            // the tombstone on first absence and the folder came
+            // straight back).
+            deletedFolderTombstones = deletedFolderTombstones.filter { _, ts in
+                now - ts < Self.tombstoneLifetime
             }
             if deletedFolderTombstones.count != countBefore { saveTombstones() }
         }
