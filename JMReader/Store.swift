@@ -446,6 +446,23 @@ final class AccountStore: ObservableObject {
         }
     }
 
+    /// After an unfavorite: drop the comic from every cached list and
+    /// fix the totals (mirrors applyFolderMove's cache surgery).
+    func applyCloudRemoval(aid: String) {
+        if cloudFavorites.contains(where: { $0.id == aid }) {
+            cloudFavorites.removeAll { $0.id == aid }
+            cloudTotal = max(0, cloudTotal - 1)
+            syncFavoritesCount(cloudTotal)
+            persistCloudSnapshot()
+        }
+        for key in Array(folderItems.keys) {
+            if folderItems[key]?.contains(where: { $0.id == aid }) == true {
+                folderItems[key]?.removeAll { $0.id == aid }
+                if let items = folderItems[key] { folderTotals[key] = items.count }
+            }
+        }
+    }
+
     private var persistScheduled = false
 
     /// Encoding a 1000+ item snapshot on the main thread was part of the

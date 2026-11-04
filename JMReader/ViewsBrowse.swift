@@ -1276,12 +1276,13 @@ struct DetailView: View {
     private func toggleFav() async {
         guard let comic = asComic else { return }
         if account.isLoggedIn {
-            guard !cloudFav else { return }   // removing cloud favorites is web-side for now
             favBusy = true
             defer { favBusy = false }
             do {
-                try await JMClient.shared.addFavorite(albumId: comic.id)
-                cloudFav = true
+                // Server-side toggle; trust its report over local state.
+                let nowFav = try await JMClient.shared.toggleFavorite(albumId: comic.id)
+                cloudFav = nowFav
+                if !nowFav { account.applyCloudRemoval(aid: comic.id) }
             } catch { /* leave state */ }
         } else {
             library.toggleFavorite(comic)
@@ -1296,8 +1297,13 @@ struct DetailView: View {
         defer { favBusy = false }
         do {
             if !cloudFav {
-                try await JMClient.shared.addFavorite(albumId: comic.id)
-                cloudFav = true
+                var nowFav = try await JMClient.shared.toggleFavorite(albumId: comic.id)
+                if !nowFav {
+                    // Local state was stale (server already had it): the
+                    // toggle removed it — toggle once more to re-add.
+                    nowFav = try await JMClient.shared.toggleFavorite(albumId: comic.id)
+                }
+                cloudFav = nowFav
                 if folderId != "0" {
                     try await JMClient.shared.favoriteFolderMove(albumId: comic.id, folderId: folderId)
                 }

@@ -157,8 +157,16 @@ final class JMClient {
                                fields: ["type": "move", "folder_id": folderId, "aid": albumId])
     }
 
-    func addFavorite(albumId: String) async throws {
-        _ = try await postForm("favorite", fields: ["aid": albumId])
+    /// The favorite endpoint is a TOGGLE (verified live 2026-11-05):
+    /// every POST flips the server-side state and the response `type`
+    /// reports what actually happened ("add" / "remove"); a `type`
+    /// form field is ignored by the server. Returns whether the album
+    /// is favorited after the call, per the server's own report.
+    func toggleFavorite(albumId: String) async throws -> Bool {
+        let data = try await postForm("favorite", fields: ["aid": albumId])
+        guard let dict = data as? [String: Any],
+              !anyString(dict["type"]).isEmpty else { throw JMError.badResponse }
+        return anyString(dict["type"]) == "add"
     }
 
     static func comicList(_ obj: [String: Any]) -> [Comic] {
