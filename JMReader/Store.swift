@@ -194,6 +194,11 @@ final class AccountStore: ObservableObject {
     @Published private(set) var cloudTotal = 0
     @Published private(set) var cloudLoading = false
     private var cloudBulkLoading = false
+    /// True once every favorites page has been fetched at least once.
+    /// Merging filters duplicate ids (the server list shifts while
+    /// paging), so the merged count can stay below the server total
+    /// forever — completeness is tracked by pages fetched, not count.
+    @Published private(set) var cloudAllFetched = false
     private var cloudPage = 0
     private var cloudPageSize = 0
     private var cloudOwner: String?
@@ -310,7 +315,8 @@ final class AccountStore: ObservableObject {
         cloudFolderId == "0" ? cloudTotal : (folderTotals[cloudFolderId] ?? 0)
     }
     var displayedCloudFullyLoaded: Bool {
-        displayedCloudTotal > 0 && displayedCloud.count >= displayedCloudTotal
+        if cloudFolderId == "0" && cloudAllFetched { return true }
+        return displayedCloudTotal > 0 && displayedCloud.count >= displayedCloudTotal
     }
 
     private func noteFolders(_ folders: [FavFolder]) {
@@ -477,7 +483,7 @@ final class AccountStore: ObservableObject {
         guard isLoggedIn else { return }
         if cloudOwner != username {
             cloudOwner = username
-            cloudFavorites = []; cloudPage = 0; cloudTotal = 0; cloudPageSize = 0
+            cloudFavorites = []; cloudPage = 0; cloudTotal = 0; cloudPageSize = 0; cloudAllFetched = false
             cloudFolders = []; cloudFolderId = "0"
             folderItems = [:]; folderTotals = [:]; folderPages = [:]
             if let user = username { loadTombstones(for: user) }
@@ -505,7 +511,7 @@ final class AccountStore: ObservableObject {
             return // cache is fresh
         }
         if res.total < cloudFavorites.count {
-            cloudFavorites = []; cloudPage = 0; cloudTotal = 0; cloudPageSize = 0
+            cloudFavorites = []; cloudPage = 0; cloudTotal = 0; cloudPageSize = 0; cloudAllFetched = false
             await loadCloudPage()
             return
         }
@@ -529,7 +535,7 @@ final class AccountStore: ObservableObject {
             syncFavoritesCount(res.total)
             persistCloudSnapshot()
         } else {
-            cloudFavorites = []; cloudPage = 0; cloudTotal = 0; cloudPageSize = 0
+            cloudFavorites = []; cloudPage = 0; cloudTotal = 0; cloudPageSize = 0; cloudAllFetched = false
             await loadCloudPage()
         }
     }
@@ -538,6 +544,11 @@ final class AccountStore: ObservableObject {
         guard !cloudLoading, isLoggedIn else { return }
         if cloudFolderId != "0" { await loadFolderPage(); return }
         if !cloudFavorites.isEmpty && cloudFullyLoaded { return }
+        if cloudPageSize > 0, cloudTotal > 0,
+           cloudPage >= Int(ceil(Double(cloudTotal) / Double(cloudPageSize))) {
+            cloudAllFetched = true
+            return
+        }
         cloudLoading = true
         defer { cloudLoading = false }
         do {
@@ -572,10 +583,21 @@ final class AccountStore: ObservableObject {
         cloudBulkLoading = true
         defer { cloudBulkLoading = false }
         if cloudFavorites.isEmpty { await loadCloudPage() }
-        guard isLoggedIn, !cloudFullyLoaded, cloudTotal > 0, cloudPageSize > 0 else { return }
+        guard isLoggedIn, cloudTotal > 0, cloudPageSize > 0 else { return }
         let totalPages = Int(ceil(Double(cloudTotal) / Double(cloudPageSize)))
-        let remaining = Array((cloudPage + 1)...totalPages)
-        guard !remaining.isEmpty else { return }
+        let startPage = cloudPage + 1
+        // CRASH FIX (build 42; crash logs 2026-11-05, EXC_BREAKPOINT in
+        // loadAllCloud): duplicates filtered during merging can keep the
+        // count below the server total, so this was re-entered with
+        // cloudPage >= totalPages and (cloudPage + 1)...totalPages was an
+        // invalid range that trapped — and the persisted oldest-first
+        // sort re-triggered it on every profile visit. All pages fetched
+        // IS complete; say so and stop.
+        if startPage > totalPages || cloudFullyLoaded {
+            cloudAllFetched = true
+            return
+        }
+        let remaining = Array(startPage...totalPages)
         // Fetch in waves of 8 pages: firing all ~54 remaining pages at
         // once bursts the network stack and the decrypt queue, and the
         // stall that follows lands right on the profile page.
@@ -610,6 +632,7 @@ final class AccountStore: ObservableObject {
         }
         if merged.count != cloudFavorites.count { cloudFavorites = merged }
         cloudPage = totalPages
+        cloudAllFetched = true
         persistCloudSnapshot()
     }
 
@@ -620,7 +643,7 @@ final class AccountStore: ObservableObject {
         Keychain.remove("username")
         username = nil
         stats = nil
-        cloudFavorites = []; cloudTotal = 0; cloudPage = 0; cloudPageSize = 0; cloudOwner = nil
+        cloudFavorites = []; cloudTotal = 0; cloudPage = 0; cloudPageSize = 0; cloudOwner = nil; cloudAllFetched = false
         cloudFolders = []; cloudFolderId = "0"
         folderItems = [:]; folderTotals = [:]; folderPages = [:]
         clearTombstones(for: outgoing)
