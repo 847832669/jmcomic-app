@@ -94,6 +94,9 @@ final class AccountStore: ObservableObject {
            let st = try? JSONDecoder().decode(MemberStats.self, from: data) {
             stats = st
         }
+        if let saved = UserDefaults.standard.dictionary(forKey: tombstoneKey) as? [String: TimeInterval] {
+            deletedFolderTombstones = saved
+        }
     }
 
     private func saveStats() {
@@ -176,6 +179,27 @@ final class AccountStore: ObservableObject {
     private var folderTotals: [String: Int] = [:]
     private var folderPages: [String: Int] = [:]
     private var folderLoading = false
+    /// Ids of folders deleted on this device, mapped to deletion time.
+    /// The favorites endpoint is raced across several API hosts whose
+    /// caches don't go stale in sync, so a just-deleted folder can keep
+    /// reappearing in folder_list for a while and noteFolders would
+    /// resurrect it. Tombstoned ids are filtered out of every server
+    /// list until a list agrees the folder is gone (or a safety
+    /// lifetime passes). Persisted so an app relaunch inside the
+    /// stale window doesn't resurrect the folder either.
+    private var deletedFolderTombstones: [String: TimeInterval] = [:]
+    private let tombstoneKey = "jm.deletedFolders.v1"
+    private static let tombstoneLifetime: TimeInterval = 600
+
+    private func saveTombstones() {
+        UserDefaults.standard.set(deletedFolderTombstones, forKey: tombstoneKey)
+    }
+
+    private func clearTombstones() {
+        guard !deletedFolderTombstones.isEmpty else { return }
+        deletedFolderTombstones = [:]
+        UserDefaults.standard.removeObject(forKey: tombstoneKey)
+    }
 
     /// Folders as shown in pickers: the default folder always comes first.
     var displayFolders: [FavFolder] {
@@ -194,7 +218,21 @@ final class AccountStore: ObservableObject {
     }
 
     private func noteFolders(_ folders: [FavFolder]) {
-        if !folders.isEmpty { cloudFolders = folders }
+        if !deletedFolderTombstones.isEmpty {
+            let now = Date().timeIntervalSince1970
+            let serverIds = Set(folders.map(\.id))
+            let countBefore = deletedFolderTombstones.count
+            // Absent from this server list: the deletion propagated,
+            // drop the tombstone. Still listed but older than the
+            // safety lifetime: also drop it (never hide a folder
+            // forever on one device's say-so).
+            deletedFolderTombstones = deletedFolderTombstones.filter { id, ts in
+                serverIds.contains(id) && now - ts < Self.tombstoneLifetime
+            }
+            if deletedFolderTombstones.count != countBefore { saveTombstones() }
+        }
+        let visible = folders.filter { deletedFolderTombstones[$0.id] == nil }
+        if !visible.isEmpty { cloudFolders = visible }
     }
 
     func switchFolder(_ id: String) async {
@@ -242,7 +280,7 @@ final class AccountStore: ObservableObject {
         for _ in 0..<5 {
             if let res = try? await JMClient.shared.favorites(page: 1, folderId: "0"),
                res.folders.contains(where: { $0.name == name }) {
-                cloudFolders = res.folders
+                noteFolders(res.folders)
                 return
             }
             try? await Task.sleep(nanoseconds: 1_200_000_000)
@@ -253,7 +291,11 @@ final class AccountStore: ObservableObject {
 
     func deleteFolder(id: String) async {
         guard id != "0" else { return }
-        // Optimistic removal, same stale-read problem as create.
+        // Optimistic removal, same stale-read problem as create. The
+        // tombstone keeps later (stale) server lists from bringing
+        // the folder back — see noteFolders.
+        deletedFolderTombstones[id] = Date().timeIntervalSince1970
+        saveTombstones()
         let backup = cloudFolders
         cloudFolders.removeAll { $0.id == id }
         folderItems[id] = nil; folderTotals[id] = nil; folderPages[id] = nil
@@ -261,13 +303,15 @@ final class AccountStore: ObservableObject {
         do {
             try await JMClient.shared.favoriteFolderDelete(folderId: id)
         } catch {
+            deletedFolderTombstones[id] = nil
+            saveTombstones()
             cloudFolders = backup
             return
         }
         for _ in 0..<3 {
             if let res = try? await JMClient.shared.favorites(page: 1, folderId: "0"),
                !res.folders.contains(where: { $0.id == id }) {
-                cloudFolders = res.folders
+                noteFolders(res.folders)
                 return
             }
             try? await Task.sleep(nanoseconds: 1_200_000_000)
@@ -350,6 +394,7 @@ final class AccountStore: ObservableObject {
             cloudFavorites = []; cloudPage = 0; cloudTotal = 0; cloudPageSize = 0
             cloudFolders = []; cloudFolderId = "0"
             folderItems = [:]; folderTotals = [:]; folderPages = [:]
+            clearTombstones()
             await hydrateCloudFromDisk()
         }
         if cloudFavorites.isEmpty {
@@ -490,6 +535,7 @@ final class AccountStore: ObservableObject {
         cloudFavorites = []; cloudTotal = 0; cloudPage = 0; cloudPageSize = 0; cloudOwner = nil
         cloudFolders = []; cloudFolderId = "0"
         folderItems = [:]; folderTotals = [:]; folderPages = [:]
+        clearTombstones()
         UserDefaults.standard.removeObject(forKey: cloudKey)
         UserDefaults.standard.removeObject(forKey: statsKey)
     }
