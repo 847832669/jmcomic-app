@@ -282,7 +282,17 @@ fun parseSeries(detail: JSONObject, albumId: String): List<Pair<String, String>>
     if (arr != null) {
         for (i in 0 until arr.length()) {
             val o = arr.optJSONObject(i) ?: continue
-            out.add(Triple(o.optString("id"), o.optString("name"), o.optInt("sort", i)))
+            val sort = o.optInt("sort", i + 1)
+            val raw = o.optString("name").trim()
+            // Live payload shape: series names are "" for some chapters and a
+            // bare episode number ("9", "10") for others — never a full label,
+            // so build the display label here instead of showing the raw value.
+            val label = when {
+                raw.isEmpty() -> "第 $sort 话"
+                raw.all { it.isDigit() } -> "第 $raw 话"
+                else -> raw
+            }
+            out.add(Triple(o.optString("id"), label, sort))
         }
     }
     val sorted = out.sortedBy { it.third }.map { it.first to it.second }.filter { it.first.isNotEmpty() }

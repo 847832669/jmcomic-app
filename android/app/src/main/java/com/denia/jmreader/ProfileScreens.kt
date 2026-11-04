@@ -258,7 +258,10 @@ fun CheckinCard(account: AccountStore) {
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun FavoritesSection(router: Router, account: AccountStore, library: LibraryStore, loggedIn: Boolean, onCloudTotal: () -> Unit = {}) {
-    var tab by remember { mutableIntStateOf(if (loggedIn) 0 else 1) } // 0 cloud, 1 local
+    // Keyed on loggedIn: composed while logged out (fresh install), the tab
+    // must still flip to cloud once the login lands — an unkeyed remember
+    // kept it stuck on the (empty) local tab and cloud favorites never showed.
+    var tab by remember(loggedIn) { mutableIntStateOf(if (loggedIn) 0 else 1) } // 0 cloud, 1 local
     var query by remember { mutableStateOf("") }
     var cloud by remember { mutableStateOf<List<JmApi.Album>>(emptyList()) }
     var cloudTotal by remember { mutableIntStateOf(0) }
@@ -293,14 +296,14 @@ fun FavoritesSection(router: Router, account: AccountStore, library: LibraryStor
                     all = all + more
                 }
                 cloud = all
-            } catch (e: Exception) {}
+            } catch (e: Exception) { msg = "云端收藏加载失败，点「云端」标签可重试" }
         }
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text("我的收藏", fontWeight = FontWeight.Bold, fontSize = 16.sp)
         Spacer(Modifier.width(12.dp))
         if (loggedIn) {
-            FilterChip(selected = tab == 0, onClick = { tab = 0 }, label = { Text("云端 $cloudTotal") },
+            FilterChip(selected = tab == 0, onClick = { if (tab == 0) cloudReload++ else tab = 0 }, label = { Text("云端 $cloudTotal") },
                 colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Pink, selectedLabelColor = Color.White))
             Spacer(Modifier.width(6.dp))
         }
@@ -593,7 +596,7 @@ fun DetailScreen(dest: DetailDest, router: Router, account: AccountStore, librar
                             chapters.forEachIndexed { idx, (cid, cname) ->
                                 Row(Modifier.fillMaxWidth().clickable { router.push(ReaderDest(cid, name)) }
                                     .padding(horizontal = 16.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Text(cname.ifEmpty { "第 1 话" }, fontSize = 14.sp)
+                                    Text(cname.ifEmpty { "第 ${idx + 1} 话" }, fontSize = 14.sp)
                                     Spacer(Modifier.weight(1f))
                                     Text("›", color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }

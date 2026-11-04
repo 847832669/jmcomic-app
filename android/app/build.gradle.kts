@@ -12,16 +12,36 @@ android {
         applicationId = "com.denia.jmreader"
         minSdk = 26
         targetSdk = 34
-        versionCode = 8
+        versionCode = 9
         versionName = "2.17"
     }
 
+    // Persistent debug key (kept OUTSIDE the repo, in the local workspace) so
+    // every local build shares one signature and updates overlay-install.
+    // The default ~/.android/debug.keystore dies with each VM replacement,
+    // which silently changed the signature between the v2.17 builds.
+    val persistKs = file("/home/hatch/workspace/jm-reader/signing/debug.keystore")
+    signingConfigs {
+        if (persistKs.exists()) {
+            create("persistDebug") {
+                storeFile = persistKs
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            if (persistKs.exists()) signingConfig = signingConfigs.getByName("persistDebug")
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (persistKs.exists()) signingConfigs.getByName("persistDebug")
+                            else signingConfigs.getByName("debug")
         }
     }
     compileOptions {
