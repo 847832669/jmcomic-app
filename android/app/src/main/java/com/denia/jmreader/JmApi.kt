@@ -7,7 +7,9 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.FormBody
 import okhttp3.OkHttpClient
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.security.MessageDigest
@@ -20,8 +22,8 @@ import javax.crypto.spec.SecretKeySpec
 // Response data = base64(AES-256-ECB/PKCS7(json)), key = Token hex string as UTF-8.
 object JmApi {
     private const val SEED = "185Hcomic3PAPP7R"
-    private val API_HOSTS = listOf("www.cdngwc.net", "www.cdnhjk.net")
-    @Volatile var apiHost = API_HOSTS[0]
+    private const val DOMAIN_FILE_SECRET = "diosfjckwpqpdfjkvnqQjsik" // public client key, ships in every open JM client
+    @Volatile var apiHost = "www.cdnhjk.net"
     @Volatile var imgHost = "cdn-msp3.jmapiproxy3.cc"
     @Volatile var version = "2.1.12"
 
@@ -60,18 +62,20 @@ object JmApi {
         bootstrapped = true
     }
 
-    /** Probe the candidate API hosts (a host that just failed goes last) and keep
-     *  the first one that answers /setting. */
+    /** Probe the pool hosts (a host that just failed goes last) and keep the
+     *  first one that answers /setting. Pool order comes from Lines. */
     private suspend fun selectHost(failedHost: String?) {
         bootstrapMutex.withLock {
-            val ordered = if (failedHost == null) API_HOSTS
-                          else API_HOSTS.filter { it != failedHost } + failedHost
+            val pool = Lines.orderedApiHosts()
+            val ordered = if (failedHost == null) pool
+                          else pool.filter { it != failedHost } + failedHost
             for (host in ordered) {
                 try {
+                    val d = request("GET", "setting", emptyMap(), null, skipBootstrap = true, host = host)
                     apiHost = host
-                    val d = request("GET", "setting", emptyMap(), null, skipBootstrap = true)
+                    Lines.preferredApi = host
                     version = d.optString("jm3_version", version)
-                    imgHost = d.optString("img_host", imgHost).removePrefix("https://").trimEnd('/')
+                    d.optString("img_host").takeIf { it.isNotEmpty() }?.let { Lines.noteSettingImgHost(it) }
                     return@withLock
                 } catch (e: Exception) { /* try next host */ }
             }
@@ -93,13 +97,13 @@ object JmApi {
         return d as? JSONArray ?: JSONArray()
     }
 
-    private suspend fun request(method: String, path: String, params: Map<String, String>, form: Map<String, String>?, skipBootstrap: Boolean = false): JSONObject {
-        val d = requestData(method, path, params, form, skipBootstrap)
+    private suspend fun request(method: String, path: String, params: Map<String, String>, form: Map<String, String>?, skipBootstrap: Boolean = false, host: String? = null): JSONObject {
+        val d = requestData(method, path, params, form, skipBootstrap, host)
         return d as? JSONObject ?: JSONObject()
     }
 
-    private suspend fun requestData(method: String, path: String, params: Map<String, String>, form: Map<String, String>?, skipBootstrap: Boolean = false): Any {
-        if (skipBootstrap) return executeOnce(method, path, params, form)
+    private suspend fun requestData(method: String, path: String, params: Map<String, String>, form: Map<String, String>?, skipBootstrap: Boolean = false, host: String? = null): Any {
+        if (skipBootstrap) return executeOnce(method, path, params, form, host ?: apiHost)
         bootstrap()
         for (attempt in 0..2) {
             try {
@@ -114,11 +118,11 @@ object JmApi {
         throw ApiException("网络连接失败，请检查网络后重试")
     }
 
-    private suspend fun executeOnce(method: String, path: String, params: Map<String, String>, form: Map<String, String>?): Any {
+    private suspend fun executeOnce(method: String, path: String, params: Map<String, String>, form: Map<String, String>?, host: String = apiHost): Any {
         return withContext(Dispatchers.IO) {
             val (token, tokenParam) = tokenPair()
             val allParams = mapOf("lang" to "TW") + params
-            val url = StringBuilder("https://$apiHost/$path")
+            val url = StringBuilder("https://$host/$path")
             url.append("?")
             url.append(allParams.entries.joinToString("&") { "${it.key}=${java.net.URLEncoder.encode(it.value, "UTF-8")}" })
             // Header set must mirror the verified web-client fingerprint exactly:
@@ -180,9 +184,15 @@ object JmApi {
 
     suspend fun latest(page: Int): List<Album> = parseAlbums(callArray("latest", mapOf("page" to page.toString())))
 
-    suspend fun search(query: String, page: Int): Pair<Int, List<Album>> {
-        val d = call("search", mapOf("search_query" to query, "page" to page.toString()))
-        return d.optInt("total") to parseAlbums(d.optJSONArray("content"))
+    /** order: mr 最新 / mv 最多观看 / tf 最多爱心 / mp 最多图片;
+     *  mainTag: 0 全部 / 1 作品 / 2 作者 / 3 标签 / 4 登场人物.
+     *  A pure-numeric query answers with redirect_aid instead of results. */
+    suspend fun search(query: String, page: Int, order: String = "mr", mainTag: Int = 0): Triple<Int, List<Album>, String?> {
+        val d = call("search", mapOf(
+            "search_query" to query, "page" to page.toString(),
+            "o" to order, "main_tag" to mainTag.toString()))
+        val redirect = d.optString("redirect_aid").ifEmpty { null }
+        return Triple(d.optInt("total"), parseAlbums(d.optJSONArray("content")), redirect)
     }
 
     data class Category(val slug: String, val name: String)
@@ -209,13 +219,36 @@ object JmApi {
     suspend fun login(username: String, password: String): JSONObject =
         callForm("login", mapOf("username" to username, "password" to password))
 
-    suspend fun favorites(page: Int): Pair<Int, List<Album>> {
-        val d = call("favorite", mapOf("page" to page.toString()))
-        // Live shape: items live under "list", not "content" (verified 2026-11-02).
-        return d.optInt("total") to parseAlbums(d.optJSONArray("list"))
+    data class Folder(val fid: String, val name: String)
+
+    suspend fun favorites(page: Int, folderId: String = "0"): Triple<Int, List<Album>, List<Folder>> {
+        val d = call("favorite", mapOf("page" to page.toString(), "folder_id" to folderId))
+        // Live shape: items live under "list", not "content" (verified 2026-11-02);
+        // the folder list rides along as "folder_list" [{FID, name}].
+        val folders = mutableListOf<Folder>()
+        d.optJSONArray("folder_list")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                folders.add(Folder(o.optString("FID"), o.optString("name")))
+            }
+        }
+        return Triple(d.optInt("total"), parseAlbums(d.optJSONArray("list")), folders)
     }
 
     suspend fun addFavorite(aid: String) { callForm("favorite", mapOf("aid" to aid)) }
+
+    suspend fun folderAdd(name: String) {
+        callForm("favorite_folder", mapOf("type" to "add", "folder_name" to name))
+    }
+
+    suspend fun folderDel(fid: String) {
+        callForm("favorite_folder", mapOf("type" to "del", "folder_id" to fid))
+    }
+
+    /** A comic lives in exactly ONE folder — this moves it. */
+    suspend fun folderMove(fid: String, aid: String) {
+        callForm("favorite_folder", mapOf("type" to "move", "folder_id" to fid, "aid" to aid))
+    }
 
     suspend fun daily(userId: String): JSONObject = call("daily", mapOf("user_id" to userId))
     suspend fun dailyCheck(userId: String, dailyId: String): JSONObject =
@@ -233,6 +266,51 @@ object JmApi {
             if (!resp.isSuccessful) throw ApiException("图片加载失败 ${resp.code}")
             resp.body?.bytes() ?: throw ApiException("图片为空")
         }
+    }
+
+    /** Raw JSON POST for our own worker endpoints (folder registry). */
+    suspend fun postJson(url: String, json: String): String? = withContext(Dispatchers.IO) {
+        try {
+            val body = json.toRequestBody("application/json".toMediaType())
+            val req = Request.Builder().url(url).post(body).build()
+            client.newCall(req).execute().use { resp -> if (resp.isSuccessful) resp.body?.string() else null }
+        } catch (e: Exception) { null }
+    }
+
+    /** Milliseconds for a /setting round trip on one host, or null on failure. */
+    suspend fun probeApiHost(host: String): Long? {
+        val t0 = System.nanoTime()
+        return try {
+            request("GET", "setting", emptyMap(), null, skipBootstrap = true, host = host)
+            (System.nanoTime() - t0) / 1_000_000
+        } catch (e: Exception) { null }
+    }
+
+    /** The official domain file is base64 AES-256-ECB, key = md5(secret) hex
+     *  string — the same construction as the API envelope. Returns
+     *  (host, display name) lines, or null when undecodable. */
+    fun decryptDomainFile(text: String): List<Pair<String, String>>? {
+        return try {
+            val cleaned = text.filter { it.isLetterOrDigit() || it == '+' || it == '/' || it == '=' }
+            if (cleaned.isEmpty()) return null
+            val plain = decrypt(cleaned, md5(DOMAIN_FILE_SECRET))
+            val obj = JSONObject(plain)
+            val pairs = obj.optJSONArray("jm3_Server")
+            if (pairs != null && pairs.length() > 0) {
+                val out = mutableListOf<Pair<String, String>>()
+                for (i in 0 until pairs.length()) {
+                    val p = pairs.optJSONArray(i) ?: continue
+                    val host = p.optString(0)
+                    if (host.isNotEmpty()) out.add(host to p.optString(1, host))
+                }
+                if (out.isNotEmpty()) return out
+            }
+            val servers = obj.optJSONArray("Server")
+            if (servers != null && servers.length() > 0) {
+                return (0 until servers.length()).map { servers.optString(it) to "线路${it + 1}" }
+            }
+            null
+        } catch (e: Exception) { null }
     }
 
     // ---------- models ----------

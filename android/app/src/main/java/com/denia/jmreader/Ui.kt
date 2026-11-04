@@ -88,6 +88,8 @@ data class CategoryDest(val slug: String, val name: String) : Dest
 object DownloadsDest : Dest
 object BlockedTagsDest : Dest
 object StorageDest : Dest
+object SettingsDest : Dest
+object LinesDest : Dest
 
 class Router {
     val stack = mutableStateListOf<Dest>()

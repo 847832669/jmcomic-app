@@ -13,6 +13,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -39,20 +40,21 @@ fun ProfileScreen(router: Router, account: AccountStore, library: LibraryStore) 
     val context = LocalContext.current
     var loggedIn by remember { mutableStateOf(account.isLoggedIn) }
     var stats by remember { mutableStateOf(account.stats) }
-    var storageBytes by remember { mutableStateOf<Long?>(null) }
     var user by remember { mutableStateOf("") }
     var pass by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var msg by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(Unit) {
-        storageBytes = withContext(Dispatchers.IO) {
-            val p = storageParts(context); p.first + p.second
-        }
-    }
-
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())
         .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 100.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("个人", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.weight(1f))
+            IconButton(onClick = { router.push(SettingsDest) }) {
+                Icon(androidx.compose.material.icons.Icons.Default.Settings, contentDescription = "设置", tint = Pink)
+            }
+        }
+        Spacer(Modifier.height(8.dp))
         if (!loggedIn) {
             Text("登录 JM 账号", fontSize = 18.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(12.dp))
@@ -137,34 +139,6 @@ fun ProfileScreen(router: Router, account: AccountStore, library: LibraryStore) 
             CheckinCard(account)
         }
 
-        Spacer(Modifier.height(14.dp))
-        IosCard(radius = 16.dp, onClick = { router.push(BlockedTagsDest) },
-            modifier = Modifier.fillMaxWidth()) {
-            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("屏蔽标签", fontSize = 16.sp)
-                Spacer(Modifier.weight(1f))
-                if (BlockTags.blockedTags.isNotEmpty()) {
-                    Text("${BlockTags.blockedTags.size} 个", fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Text(" ›", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-
-        Spacer(Modifier.height(10.dp))
-        IosCard(radius = 16.dp, onClick = { router.push(StorageDest) },
-            modifier = Modifier.fillMaxWidth()) {
-            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("存储空间", fontSize = 16.sp)
-                Spacer(Modifier.weight(1f))
-                storageBytes?.let {
-                    Text(android.text.format.Formatter.formatFileSize(context, it), fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Text(" ›", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-
         Spacer(Modifier.height(18.dp))
         FavoritesSection(router, account, library, loggedIn, onCloudTotal = { stats = account.stats })
     }
@@ -197,6 +171,20 @@ fun CheckinCard(account: AccountStore) {
                     todaySigned = day.optBoolean("signed", false)
                 }
             }
+        }
+    }
+    // Auto check-in (Settings toggle, once per day): claim the day first so a
+    // failure never loops, then check in and refresh the card.
+    LaunchedEffect(d) {
+        val fullToday = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
+        if (!todaySigned && Settings.autoCheckIn && Settings.autoCheckinDay != fullToday && dailyId.isNotEmpty()) {
+            Settings.autoCheckinDay = fullToday
+            try {
+                val r = JmApi.dailyCheck(account.userId, dailyId)
+                val m = r.optString("msg")
+                note = if (m.isEmpty()) "今日已自动签到" else "今日已自动签到：$m"
+                reload()
+            } catch (e: Exception) { /* manual button remains available */ }
         }
     }
     IosCard(radius = 18.dp, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
@@ -267,6 +255,7 @@ fun CheckinCard(account: AccountStore) {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun FavoritesSection(router: Router, account: AccountStore, library: LibraryStore, loggedIn: Boolean, onCloudTotal: () -> Unit = {}) {
     var tab by remember { mutableIntStateOf(if (loggedIn) 0 else 1) } // 0 cloud, 1 local
@@ -274,19 +263,37 @@ fun FavoritesSection(router: Router, account: AccountStore, library: LibraryStor
     var cloud by remember { mutableStateOf<List<JmApi.Album>>(emptyList()) }
     var cloudTotal by remember { mutableIntStateOf(0) }
     var local by remember { mutableStateOf(library.localFavorites()) }
+    var folders by remember { mutableStateOf<List<JmApi.Folder>>(listOf(JmApi.Folder("0", "默认收藏"))) }
+    var folderId by remember { mutableStateOf("0") }
+    var cloudReload by remember { mutableIntStateOf(0) }
+    var moveMode by remember { mutableStateOf(false) }
+    var pendingMove by remember { mutableStateOf<JmApi.Album?>(null) }
+    var confirmDelete by remember { mutableStateOf<JmApi.Folder?>(null) }
+    var showCreate by remember { mutableStateOf(false) }
+    var msg by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    val username = account.username ?: ""
 
-    LaunchedEffect(loggedIn) {
+    LaunchedEffect(loggedIn, folderId, cloudReload) {
         local = library.localFavorites()
         if (loggedIn) {
-            scope.launch {
-                try {
-                    val (total, first) = JmApi.favorites(1)
-                    cloudTotal = total; cloud = first
-                    account.syncFavCount(total)
-                    onCloudTotal()
-                } catch (e: Exception) {}
-            }
+            FolderRegistry.syncFromCloud(account)
+            try {
+                val (total, first, serverFolders) = JmApi.favorites(1, folderId)
+                cloudTotal = total
+                folders = FolderRegistry.visible(username, serverFolders)
+                if (folders.none { it.fid == folderId }) folderId = "0"
+                account.syncFavCount(total)
+                onCloudTotal()
+                var all = first
+                val pages = ((total + 19) / 20).coerceAtMost(15)
+                for (p in 2..pages) {
+                    val (_, more, _) = JmApi.favorites(p, folderId)
+                    if (more.isEmpty()) break
+                    all = all + more
+                }
+                cloud = all
+            } catch (e: Exception) {}
         }
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -299,6 +306,48 @@ fun FavoritesSection(router: Router, account: AccountStore, library: LibraryStor
         }
         FilterChip(selected = tab == 1, onClick = { tab = 1 }, label = { Text("本地 ${local.size}") },
             colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Pink, selectedLabelColor = Color.White))
+        Spacer(Modifier.weight(1f))
+        if (loggedIn && tab == 0) {
+            TextButton(onClick = { moveMode = !moveMode }) {
+                Text(if (moveMode) "完成" else "整理", color = Pink, fontSize = 13.sp)
+            }
+        }
+    }
+    if (loggedIn && tab == 0) {
+        // Folder chips: tap to switch, long-press to delete (default folder excluded).
+        androidx.compose.foundation.lazy.LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(vertical = 4.dp)) {
+            items(folders.size) { i ->
+                val f = folders[i]
+                val sel = f.fid == folderId
+                Surface(
+                    shape = RoundedCornerShape(50),
+                    color = if (sel) Pink else MaterialTheme.colorScheme.surface,
+                    border = if (sel) null else androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    modifier = Modifier.combinedClickable(
+                        onClick = { folderId = f.fid },
+                        onLongClick = { if (f.fid != "0") confirmDelete = f },
+                    )
+                ) {
+                    Text(f.name, fontSize = 13.sp,
+                        color = if (sel) Color.White else MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp))
+                }
+            }
+            item {
+                Surface(
+                    shape = RoundedCornerShape(50),
+                    color = MaterialTheme.colorScheme.surface,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    modifier = Modifier.clickable { showCreate = true }
+                ) {
+                    Text("+ 新建", fontSize = 13.sp, modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp))
+                }
+            }
+        }
+        Text("长按收藏夹可删除；点「整理」后点任意收藏可移动到其他收藏夹",
+            fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     OutlinedTextField(query, { query = it }, placeholder = { Text("搜收藏（标题/作者）") }, singleLine = true,
         shape = RoundedCornerShape(50),
@@ -309,6 +358,7 @@ fun FavoritesSection(router: Router, account: AccountStore, library: LibraryStor
             focusedBorderColor = Pink,
         ),
         modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp))
+    msg?.let { Text(it, fontSize = 12.sp, color = Pink, modifier = Modifier.padding(bottom = 6.dp)) }
     val source = if (tab == 0 && loggedIn) cloud else local
     val filtered = if (query.isBlank()) source else source.filter {
         it.name.contains(query, true) || it.author.contains(query, true)
@@ -319,8 +369,92 @@ fun FavoritesSection(router: Router, account: AccountStore, library: LibraryStor
         LazyVerticalGrid(GridCells.Fixed(3), modifier = Modifier.heightIn(max = 2000.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(12.dp),
             userScrollEnabled = false) {
-            items(filtered, key = { it.id }) { AlbumCard(it, router) }
+            items(filtered, key = { it.id }) { album ->
+                Box {
+                    AlbumCard(album, router)
+                    if (moveMode && tab == 0 && loggedIn) {
+                        Box(Modifier.matchParentSize().clickable { pendingMove = album })
+                    }
+                }
+            }
         }
+    }
+
+    if (showCreate) {
+        var name by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showCreate = false },
+            title = { Text("新建收藏夹") },
+            text = {
+                OutlinedTextField(name, { name = it }, placeholder = { Text("收藏夹名称") }, singleLine = true)
+            },
+            confirmButton = {
+                TextButton(enabled = name.isNotBlank(), onClick = {
+                    val n = name.trim()
+                    showCreate = false
+                    scope.launch {
+                        try { JmApi.folderAdd(n) } catch (e: Exception) {}
+                        // The new folder's FID only appears via folder_list, and
+                        // propagation between JM's hosts can lag — poll briefly.
+                        for (i in 0 until 5) {
+                            try {
+                                val (_, _, serverFolders) = JmApi.favorites(1)
+                                if (serverFolders.any { it.name == n }) break
+                            } catch (e: Exception) {}
+                            kotlinx.coroutines.delay(1200)
+                        }
+                        cloudReload++
+                    }
+                }) { Text("新建", color = Pink) }
+            },
+            dismissButton = { TextButton(onClick = { showCreate = false }) { Text("取消") } },
+        )
+    }
+
+    confirmDelete?.let { f ->
+        AlertDialog(
+            onDismissRequest = { confirmDelete = null },
+            title = { Text("删除收藏夹「${f.name}」？") },
+            text = { Text("JM 官方的删除接口目前异常，删除会通过云端名单同步，在所有设备上隐藏这个收藏夹。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmDelete = null
+                    FolderRegistry.addTombstone(username, f.fid)
+                    scope.launch {
+                        FolderRegistry.reportDeleted(account, f.fid)
+                        try { JmApi.folderDel(f.fid) } catch (e: Exception) {}
+                    }
+                    if (folderId == f.fid) folderId = "0"
+                    cloudReload++
+                }) { Text("删除", color = Pink) }
+            },
+            dismissButton = { TextButton(onClick = { confirmDelete = null }) { Text("取消") } },
+        )
+    }
+
+    pendingMove?.let { album ->
+        AlertDialog(
+            onDismissRequest = { pendingMove = null },
+            title = { Text("移动「${album.name}」到") },
+            text = {
+                Column {
+                    folders.filter { it.fid != folderId }.forEach { f ->
+                        TextButton(onClick = {
+                            pendingMove = null
+                            scope.launch {
+                                try {
+                                    JmApi.folderMove(f.fid, album.id)
+                                    msg = "已移动到「${f.name}」"
+                                    cloudReload++
+                                } catch (e: Exception) { msg = "移动失败：${e.message}" }
+                            }
+                        }) { Text(f.name, color = Pink) }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { pendingMove = null }) { Text("取消") } },
+        )
     }
 }
 
@@ -334,6 +468,8 @@ fun DetailScreen(dest: DetailDest, router: Router, account: AccountStore, librar
     var fav by remember { mutableStateOf(library.isFavorite(dest.id)) }
     var tagsExpanded by remember { mutableStateOf(false) }
     var toast by remember { mutableStateOf<String?>(null) }
+    var showFolderPick by remember { mutableStateOf(false) }
+    var pickFolders by remember { mutableStateOf<List<JmApi.Folder>>(listOf(JmApi.Folder("0", "默认收藏"))) }
 
     LaunchedEffect(dest.id) {
         try {
@@ -405,9 +541,16 @@ fun DetailScreen(dest: DetailDest, router: Router, account: AccountStore, librar
                             colors = ButtonDefaults.buttonColors(containerColor = Pink)) { Text("开始阅读", color = Color.White) }
                         OutlinedButton(onClick = {
                             if (fav) { library.removeFavorite(dest.id); fav = false; toast = "已取消本地收藏" }
-                            else {
+                            else if (account.isLoggedIn) {
+                                scope.launch {
+                                    try {
+                                        val (_, _, serverFolders) = JmApi.favorites(1)
+                                        pickFolders = FolderRegistry.visible(account.username ?: "", serverFolders)
+                                    } catch (e: Exception) {}
+                                    showFolderPick = true
+                                }
+                            } else {
                                 library.addFavorite(albumModel); fav = true
-                                if (account.isLoggedIn) scope.launch { try { JmApi.addFavorite(dest.id) } catch (e: Exception) {} }
                                 toast = "已收藏"
                             }
                         }, shape = RoundedCornerShape(14.dp)) { Text(if (fav) "已收藏" else "收藏", color = Pink) }
@@ -417,6 +560,31 @@ fun DetailScreen(dest: DetailDest, router: Router, account: AccountStore, librar
                         }
                     }
                     toast?.let { Text(it, color = Pink, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp)) }
+                    if (showFolderPick) {
+                        AlertDialog(
+                            onDismissRequest = { showFolderPick = false },
+                            title = { Text("收藏到") },
+                            text = {
+                                Column {
+                                    pickFolders.forEach { f ->
+                                        TextButton(onClick = {
+                                            showFolderPick = false
+                                            library.addFavorite(albumModel); fav = true
+                                            scope.launch {
+                                                try {
+                                                    JmApi.addFavorite(dest.id)
+                                                    if (f.fid != "0") JmApi.folderMove(f.fid, dest.id)
+                                                    toast = "已收藏到「${f.name}」"
+                                                } catch (e: Exception) { toast = "云端收藏失败：${e.message}" }
+                                            }
+                                        }) { Text(f.name, color = Pink) }
+                                    }
+                                }
+                            },
+                            confirmButton = {},
+                            dismissButton = { TextButton(onClick = { showFolderPick = false }) { Text("取消") } },
+                        )
+                    }
                     Spacer(Modifier.height(18.dp))
                     Text("章节", fontWeight = FontWeight.Bold, fontSize = 15.sp)
                     Spacer(Modifier.height(8.dp))
@@ -470,7 +638,7 @@ fun AuthorScreen(dest: AuthorDest, router: Router) {
     Column(Modifier.fillMaxSize()) {
         TopBar(title = dest.name) { router.pop() }
         PagedGrid(loader = { p ->
-            val (_, all) = JmApi.search(dest.name, p)
+            val (_, all, _) = JmApi.search(dest.name, p)
             all.filter { it.author.contains(dest.name) }
         }, router = router, key = "author-${dest.name}")
     }

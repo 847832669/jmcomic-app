@@ -238,3 +238,103 @@ object BlockTags {
         }
     }
 }
+
+/** App settings (mirror of the iOS SettingsView): auto check-in, reader mode. */
+object Settings {
+    private var prefs: SharedPreferences? = null
+    var autoCheckIn by mutableStateOf(true)
+        private set
+    var readerMode by mutableStateOf("scroll") // "scroll" | "page"
+        private set
+    var readerRtl by mutableStateOf(false)
+        private set
+
+    fun init(context: Context) {
+        if (prefs != null) return
+        val p = context.getSharedPreferences("jm.settings", Context.MODE_PRIVATE)
+        prefs = p
+        autoCheckIn = p.getBoolean("autoCheckIn", true)
+        readerMode = p.getString("readerMode", "scroll") ?: "scroll"
+        readerRtl = p.getBoolean("readerRtl", false)
+    }
+
+    fun updateAutoCheckIn(v: Boolean) { autoCheckIn = v; prefs?.edit()?.putBoolean("autoCheckIn", v)?.apply() }
+    fun updateReaderMode(v: String) { readerMode = v; prefs?.edit()?.putString("readerMode", v)?.apply() }
+    fun updateReaderRtl(v: Boolean) { readerRtl = v; prefs?.edit()?.putBoolean("readerRtl", v)?.apply() }
+
+    var autoCheckinDay: String
+        get() = prefs?.getString("autoCheckinDay", "") ?: ""
+        set(v) { prefs?.edit()?.putString("autoCheckinDay", v)?.apply() }
+}
+
+/** Deleted favorite folders. JM's own folder delete is broken server-side
+ * (envelope 200, payload {status: fail}) and its folder lists disagree
+ * between hosts, so — like the iOS app — "deleted" is decided by a registry
+ * on our own worker, keyed by sha256("username:uid"); local per-account
+ * tombstones are the offline fallback and merge target. */
+object FolderRegistry {
+    private const val REGISTRY_URL = "https://anireader-sync.peimingliang8.workers.dev/jm/folders"
+    private var prefs: SharedPreferences? = null
+    @Volatile private var syncedAt = 0L
+
+    fun init(context: Context) {
+        if (prefs != null) return
+        prefs = context.getSharedPreferences("jm.folders", Context.MODE_PRIVATE)
+    }
+
+    fun tombstones(username: String): Set<String> {
+        val raw = prefs?.getString("deleted.$username", "[]") ?: "[]"
+        val arr = try { JSONArray(raw) } catch (e: Exception) { JSONArray() }
+        return (0 until arr.length()).map { arr.optString(it) }.filter { it.isNotEmpty() }.toSet()
+    }
+
+    fun addTombstone(username: String, fid: String) {
+        val set = tombstones(username) + fid
+        prefs?.edit()?.putString("deleted.$username", JSONArray(set.toList()).toString())?.apply()
+    }
+
+    fun accountKey(username: String, uid: String): String {
+        val d = java.security.MessageDigest.getInstance("SHA-256")
+            .digest("$username:$uid".toByteArray(Charsets.UTF_8))
+        return d.joinToString("") { "%02x".format(it) }
+    }
+
+    suspend fun syncFromCloud(account: AccountStore, force: Boolean = false) {
+        val username = account.username ?: return
+        if (!force && System.currentTimeMillis() - syncedAt < 10 * 60 * 1000L) return
+        syncedAt = System.currentTimeMillis()
+        try {
+            val key = accountKey(username, account.userId)
+            val text = String(JmApi.fetchBytes("$REGISTRY_URL?acct=$key"), Charsets.UTF_8)
+            val arr = JSONObject(text).optJSONArray("deleted") ?: return
+            val have = tombstones(username).toMutableSet()
+            var changed = false
+            for (i in 0 until arr.length()) {
+                val id = arr.optString(i)
+                if (id.isNotEmpty() && have.add(id)) changed = true
+            }
+            if (changed) {
+                prefs?.edit()?.putString("deleted.$username", JSONArray(have.toList()).toString())?.apply()
+            }
+        } catch (e: Exception) { /* local tombstones still apply */ }
+    }
+
+    suspend fun reportDeleted(account: AccountStore, fid: String) {
+        val username = account.username ?: return
+        try {
+            val key = accountKey(username, account.userId)
+            val body = JSONObject().put("acct", key).put("add", JSONArray().put(fid)).toString()
+            JmApi.postJson(REGISTRY_URL, body)
+        } catch (e: Exception) { /* best effort; local tombstone already saved */ }
+    }
+
+    /** Server folder list with deleted folders filtered out; a synthetic
+     * default folder leads when the server list lacks FID 0. */
+    fun visible(username: String, server: List<JmApi.Folder>): List<JmApi.Folder> {
+        val gone = tombstones(username)
+        val out = mutableListOf<JmApi.Folder>()
+        if (server.none { it.fid == "0" }) out.add(JmApi.Folder("0", "默认收藏"))
+        server.forEach { if (!gone.contains(it.fid)) out.add(it) }
+        return out
+    }
+}

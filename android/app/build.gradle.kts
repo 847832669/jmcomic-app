@@ -12,8 +12,8 @@ android {
         applicationId = "com.denia.jmreader"
         minSdk = 26
         targetSdk = 34
-        versionCode = 7
-        versionName = "2.16"
+        versionCode = 8
+        versionName = "2.17"
     }
 
     buildTypes {

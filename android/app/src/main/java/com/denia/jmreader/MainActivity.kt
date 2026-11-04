@@ -88,6 +88,13 @@ fun JmApp(externalPdf: android.net.Uri? = null, onExternalPdfDone: () -> Unit = 
     val library = remember { LibraryStore(context) }
     val history = remember { HistoryStore(context) }
     remember { BlockTags.init(context) }
+    remember { Lines.init(context) }
+    remember { Settings.init(context) }
+    remember { FolderRegistry.init(context) }
+    LaunchedEffect(Unit) {
+        JmApi.imgHost = Lines.currentImgHost()
+        launch { Lines.refresh(false) }
+    }
     val router = remember { Router() }
     val pagerState = rememberPagerState(pageCount = { 4 })
     val scope = rememberCoroutineScope()
@@ -138,6 +145,8 @@ fun JmApp(externalPdf: android.net.Uri? = null, onExternalPdfDone: () -> Unit = 
                         DownloadsDest -> DownloadsScreen(router)
                         BlockedTagsDest -> BlockedTagsScreen(router)
                         StorageDest -> StorageScreen(router)
+                        SettingsDest -> SettingsScreen(router, account)
+                        LinesDest -> LinesScreen(router)
                     }
                 }
             }

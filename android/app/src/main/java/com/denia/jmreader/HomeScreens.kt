@@ -22,6 +22,7 @@ import androidx.compose.runtime.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.painterResource
@@ -231,11 +232,62 @@ fun RecommendContent(router: Router) {
 }
 
 // ---------------- Search ----------------
+private val SEARCH_TYPES = listOf("全部", "作品", "作者", "标签", "登场人物")
+private val SEARCH_ORDERS = listOf("最新" to "mr", "最多观看" to "mv", "最多爱心" to "tf", "最多图片" to "mp")
+
+@Composable
+fun OptionChipRow(options: List<String>, selected: Int, onSelect: (Int) -> Unit) {
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)) {
+        items(options.size) { i ->
+            val sel = i == selected
+            Surface(
+                shape = RoundedCornerShape(50),
+                color = if (sel) Pink else MaterialTheme.colorScheme.surface,
+                border = if (sel) null else androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                modifier = Modifier.clickable { onSelect(i) }
+            ) {
+                Text(options[i], fontSize = 13.sp,
+                    color = if (sel) Color.White else MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp))
+            }
+        }
+    }
+}
+
 @Composable
 fun SearchScreen(router: Router, history: HistoryStore) {
     var query by remember { mutableStateOf("") }
     var submitted by remember { mutableStateOf<String?>(null) }
     var queries by remember { mutableStateOf(history.queries()) }
+    var orderIdx by remember { mutableIntStateOf(0) }
+    var typeIdx by remember { mutableIntStateOf(0) }
+    var redirectAlbum by remember { mutableStateOf<JmApi.Album?>(null) }
+    val order = SEARCH_ORDERS[orderIdx].second
+    val s0 = submitted
+
+    // Pure-numeric queries: the API answers with redirect_aid — jump straight
+    // to that album instead of showing an empty result grid.
+    LaunchedEffect(s0, order, typeIdx) {
+        redirectAlbum = null
+        val query2 = s0 ?: return@LaunchedEffect
+        if (query2.isEmpty() || !query2.all { it.isDigit() }) return@LaunchedEffect
+        try {
+            val (_, _, red) = JmApi.search(query2, 1, order, typeIdx)
+            if (red != null) {
+                val d = JmApi.album(red)
+                val authors = (d.optJSONArray("author")?.let { a ->
+                    (0 until a.length()).map { a.optString(it) }.filter { x -> x.isNotEmpty() }
+                } ?: emptyList())
+                val tagList = (d.optJSONArray("tags")?.let { t ->
+                    (0 until t.length()).map { t.optString(it) }
+                } ?: emptyList())
+                redirectAlbum = JmApi.Album(red, d.optString("name"),
+                    authors.joinToString(" / "), tagList,
+                    d.optString("total_views"), d.optString("likes"))
+            }
+        } catch (e: Exception) {}
+    }
 
     Column(Modifier.fillMaxSize().padding(top = 10.dp)) {
         OutlinedTextField(
@@ -257,8 +309,19 @@ fun SearchScreen(router: Router, history: HistoryStore) {
                 }) { Text("搜索", color = Pink) }
             }
         )
+        OptionChipRow(SEARCH_TYPES, typeIdx) { typeIdx = it }
+        OptionChipRow(SEARCH_ORDERS.map { it.first }, orderIdx) { orderIdx = it }
         val s = submitted
-        if (s == null) {
+        val red = redirectAlbum
+        if (s != null && red != null) {
+            Text("编号直达", fontWeight = FontWeight.Bold, fontSize = 14.sp,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp))
+            LazyVerticalGrid(GridCells.Fixed(3), modifier = Modifier.weight(1f).padding(horizontal = 14.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                item { AlbumCard(red, router) }
+            }
+        } else if (s == null) {
             if (queries.isNotEmpty()) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("历史", fontWeight = FontWeight.Bold, fontSize = 14.sp)
@@ -279,7 +342,7 @@ fun SearchScreen(router: Router, history: HistoryStore) {
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp))
             PagedGrid(loader = { p -> if (p == 1) JmApi.categoryFilter("doujin", 1) else emptyList() }, router = router, key = "doujin-rec")
         } else {
-            PagedGrid(loader = { p -> JmApi.search(s, p).second }, router = router, key = "search-$s")
+            PagedGrid(loader = { p -> JmApi.search(s, p, order, typeIdx).second }, router = router, key = "search-$s-$order-$typeIdx")
         }
     }
 }
