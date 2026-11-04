@@ -7,6 +7,8 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -155,11 +157,15 @@ object BlockTags {
     private var prefs: SharedPreferences? = null
     var blockedTags by mutableStateOf<List<String>>(emptyList())
         private set
+    var blockedAuthors by mutableStateOf<List<String>>(emptyList())
+        private set
     var revision by mutableIntStateOf(0)
         private set
     private val tagCache = mutableMapOf<String, List<String>>()
+    private val authorCache = mutableMapOf<String, List<String>>()
     private val inFlight = mutableSetOf<String>()
     private val sem = Semaphore(4)
+    private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     fun init(context: Context) {
         if (prefs != null) return
@@ -167,12 +173,21 @@ object BlockTags {
         prefs = p
         val arr = try { JSONArray(p.getString("list", "[]") ?: "[]") } catch (e: Exception) { JSONArray() }
         blockedTags = (0 until arr.length()).map { arr.optString(it) }.filter { it.isNotEmpty() }
+        val aarr = try { JSONArray(p.getString("authors", "[]") ?: "[]") } catch (e: Exception) { JSONArray() }
+        blockedAuthors = (0 until aarr.length()).map { aarr.optString(it) }.filter { it.isNotEmpty() }
         val obj = try { JSONObject(p.getString("cache", "{}") ?: "{}") } catch (e: Exception) { JSONObject() }
         val keys = obj.keys()
         while (keys.hasNext()) {
             val k = keys.next()
             val a = obj.optJSONArray(k)
             tagCache[k] = if (a == null) emptyList() else (0 until a.length()).map { a.optString(it) }
+        }
+        val aobj = try { JSONObject(p.getString("acache", "{}") ?: "{}") } catch (e: Exception) { JSONObject() }
+        val akeys = aobj.keys()
+        while (akeys.hasNext()) {
+            val k = akeys.next()
+            val a = aobj.optJSONArray(k)
+            authorCache[k] = if (a == null) emptyList() else (0 until a.length()).map { a.optString(it) }
         }
     }
 
@@ -190,36 +205,71 @@ object BlockTags {
         prefs?.edit()?.putString("list", JSONArray(blockedTags).toString())?.apply()
     }
 
-    /** Record tags learned from an album detail fetch (empty recorded too,
-     * so tag-less albums are not refetched forever). */
-    fun remember(albumId: String, tags: List<String>) {
-        if (tagCache[albumId] == tags) return
-        tagCache[albumId] = tags
+    fun addAuthor(raw: String) {
+        val t = raw.trim()
+        if (t.isEmpty() || blockedAuthors.contains(t)) return
+        blockedAuthors = blockedAuthors + t
         revision++
-        val obj = JSONObject()
-        for ((k, v) in tagCache) obj.put(k, JSONArray(v))
-        prefs?.edit()?.putString("cache", obj.toString())?.apply()
+        prefs?.edit()?.putString("authors", JSONArray(blockedAuthors).toString())?.apply()
+    }
+
+    fun removeAuthor(name: String) {
+        blockedAuthors = blockedAuthors - name
+        revision++
+        prefs?.edit()?.putString("authors", JSONArray(blockedAuthors).toString())?.apply()
+    }
+
+    /** Record tags/authors learned from an album detail fetch (empty
+     * recorded too, so tag-less albums are not refetched forever). The
+     * whole-cache JSON encode runs on an IO scope: doing it on the caller
+     * (main) thread for every learned album was the Android twin of the
+     * iOS v2.18 build-40 list jank. */
+    fun remember(albumId: String, tags: List<String>, authors: List<String>? = null) {
+        var changed = false
+        if (tagCache[albumId] != tags) { tagCache[albumId] = tags; changed = true }
+        if (authors != null && authorCache[albumId] != authors) { authorCache[albumId] = authors; changed = true }
+        if (!changed) return
+        revision++
+        val tagsSnap = HashMap(tagCache)
+        val authorsSnap = HashMap(authorCache)
+        ioScope.launch {
+            val obj = JSONObject()
+            for ((k, v) in tagsSnap) obj.put(k, JSONArray(v))
+            val aobj = JSONObject()
+            for ((k, v) in authorsSnap) aobj.put(k, JSONArray(v))
+            prefs?.edit()?.putString("cache", obj.toString())?.putString("acache", aobj.toString())?.apply()
+        }
     }
 
     fun isBlocked(album: JmApi.Album): Boolean {
-        if (blockedTags.isEmpty()) return false
+        if (blockedTags.isEmpty() && blockedAuthors.isEmpty()) return false
         val hay = album.name + "\n" + album.author
         for (t in blockedTags) if (hay.contains(t, ignoreCase = true)) return true
         val tags = tagCache[album.id]
         if (tags != null) for (t in blockedTags) if (tags.contains(t)) return true
+        for (a in blockedAuthors) if (album.author.contains(a, ignoreCase = true)) return true
+        val authors = authorCache[album.id]
+        if (authors != null) for (a in blockedAuthors) {
+            if (authors.any { it.equals(a, ignoreCase = true) }) return true
+        }
         return false
     }
 
     fun visible(items: List<JmApi.Album>): List<JmApi.Album> {
-        if (blockedTags.isEmpty()) return items
+        if (blockedTags.isEmpty() && blockedAuthors.isEmpty()) return items
         return items.filter { !isBlocked(it) }
     }
 
-    /** Background: learn tags for listed albums whose tags are still
-     * unknown (4 at a time, at most 40 per call). */
+    /** Background: learn tags/authors for listed albums whose data an
+     * active filter still needs (4 at a time, at most 40 per call). */
     fun prefetch(scope: CoroutineScope, items: List<JmApi.Album>) {
-        if (blockedTags.isEmpty()) return
-        val batch = items.map { it.id }.filter { !tagCache.containsKey(it) && !inFlight.contains(it) }.take(40)
+        val needTags = blockedTags.isNotEmpty()
+        val needAuthors = blockedAuthors.isNotEmpty()
+        if (!needTags && !needAuthors) return
+        val batch = items.map { it.id }.filter { id ->
+            ((needTags && !tagCache.containsKey(id)) || (needAuthors && !authorCache.containsKey(id)))
+                && !inFlight.contains(id)
+        }.take(40)
         if (batch.isEmpty()) return
         inFlight.addAll(batch)
         scope.launch {
@@ -230,12 +280,77 @@ object BlockTags {
                         val t = d.optJSONArray("tags")
                         val tags = mutableListOf<String>()
                         if (t != null) for (i in 0 until t.length()) tags.add(t.optString(i))
-                        if (tags.isNotEmpty()) remember(id, tags)
+                        val authors = mutableListOf<String>()
+                        val a = d.opt("author")
+                        if (a is JSONArray) for (i in 0 until a.length()) authors.add(a.optString(i))
+                        else if (a is String && a.isNotEmpty()) authors.add(a)
+                        remember(id, tags, authors)
                     } catch (e: Exception) { /* leave unknown; retried next time */ }
                 }
                 inFlight.remove(id)
             }
         }
+    }
+}
+
+/** Reading statistics (mirror of iOS v2.18): albums/chapters/pages/time,
+ * counted locally from this version on. */
+object ReadingStats {
+    private var prefs: SharedPreferences? = null
+    private var albums = mutableSetOf<String>()
+    private var chapters = mutableSetOf<String>()
+    var albumCount by mutableIntStateOf(0)
+        private set
+    var chapterCount by mutableIntStateOf(0)
+        private set
+    var pagesRead by mutableIntStateOf(0)
+        private set
+    var secondsRead by mutableIntStateOf(0)
+        private set
+
+    fun init(context: Context) {
+        if (prefs != null) return
+        val p = context.getSharedPreferences("jm.readstats", Context.MODE_PRIVATE)
+        prefs = p
+        fun loadSet(key: String): MutableSet<String> {
+            val arr = try { JSONArray(p.getString(key, "[]") ?: "[]") } catch (e: Exception) { JSONArray() }
+            val out = mutableSetOf<String>()
+            for (i in 0 until arr.length()) arr.optString(i).takeIf { it.isNotEmpty() }?.let { out.add(it) }
+            return out
+        }
+        albums = loadSet("albums")
+        chapters = loadSet("chapters")
+        pagesRead = p.getInt("pages", 0)
+        secondsRead = p.getInt("seconds", 0)
+        albumCount = albums.size
+        chapterCount = chapters.size
+    }
+
+    private fun persist() {
+        val p = prefs ?: return
+        p.edit()
+            .putString("albums", JSONArray(albums.toList()).toString())
+            .putString("chapters", JSONArray(chapters.toList()).toString())
+            .putInt("pages", pagesRead)
+            .putInt("seconds", secondsRead)
+            .apply()
+    }
+
+    /** First open of a chapter counts it (and its pages) once. */
+    fun recordChapter(albumId: String, chapterId: String, pages: Int) {
+        var changed = false
+        if (albums.add(albumId)) { albumCount = albums.size; changed = true }
+        if (chapters.add(chapterId)) {
+            chapterCount = chapters.size
+            pagesRead += pages
+            changed = true
+        }
+        if (changed) persist()
+    }
+
+    fun addSeconds(sec: Int) {
+        secondsRead += sec
+        prefs?.edit()?.putInt("seconds", secondsRead)?.apply()
     }
 }
 

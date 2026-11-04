@@ -17,15 +17,67 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.json.JSONObject
+
+/** Small in-memory cache of decoded reader pages. The next-chapter
+ * preload warms it, and ReaderPage reads through it, so flipping to the
+ * next chapter shows its first pages instantly. Capped; eldest evicted. */
+object ReaderCache {
+    private val map = object : LinkedHashMap<String, Bitmap>(32, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap>): Boolean = size > 28
+    }
+    @Synchronized fun get(chapterId: String, file: String): Bitmap? = map["$chapterId/$file"]
+    @Synchronized fun put(chapterId: String, file: String, bmp: Bitmap) { map["$chapterId/$file"] = bmp }
+}
 
 @Composable
 fun ReaderScreen(dest: ReaderDest, router: Router) {
     var chapter by remember(dest.chapterId) { mutableStateOf<JSONObject?>(null) }
     var error by remember(dest.chapterId) { mutableStateOf<String?>(null) }
+    val preloadScope = remember { CoroutineScope(SupervisorJob() + Dispatchers.IO) }
+    var preloadJob by remember(dest.chapterId) { mutableStateOf<Job?>(null) }
     LaunchedEffect(dest.chapterId) {
-        try { chapter = JmApi.chapter(dest.chapterId) } catch (e: Exception) { error = e.message }
+        try {
+            val ch = JmApi.chapter(dest.chapterId)
+            chapter = ch
+            val imgs = ch.optJSONArray("images")
+            val count = imgs?.length() ?: 0
+            ReadingStats.recordChapter(
+                albumId = dest.albumId.ifEmpty { dest.chapterId },
+                chapterId = dest.chapterId, pages = count)
+            // Next-chapter preload (bounded, sequential — the iOS build-40
+            // lesson): chapter data + the first 6 pages only, warmed into
+            // ReaderCache one at a time instead of a parallel storm.
+            val series = parseSeries(ch, dest.chapterId)
+            val idx = series.indexOfFirst { it.first == dest.chapterId }
+            val nextId = if (idx >= 0 && idx < series.size - 1) series[idx + 1].first else null
+            if (nextId != null) {
+                preloadJob?.cancel()
+                preloadJob = preloadScope.launch {
+                    try {
+                        val nch = JmApi.chapter(nextId)
+                        val nimgs = nch.optJSONArray("images")
+                        val nfiles = (0 until (nimgs?.length() ?: 0)).map { nimgs!!.optString(it) }
+                        for (f in nfiles.take(6)) {
+                            if (ReaderCache.get(nextId, f) != null) continue
+                            val bytes = JmApi.fetchBytes(JmApi.photoUrl(nextId, f))
+                            ReaderCache.put(nextId, f, Descramble.decode(bytes, nextId, f))
+                        }
+                    } catch (e: Exception) { /* preload is best-effort */ }
+                }
+            }
+        } catch (e: Exception) { error = e.message }
     }
+    LaunchedEffect(dest.chapterId) {
+        while (true) { delay(10_000); ReadingStats.addSeconds(10) }
+    }
+    DisposableEffect(dest.chapterId) { onDispose { preloadJob?.cancel() } }
     Column(Modifier.fillMaxSize()) {
         val ch = chapter
         if (ch == null) {
@@ -99,13 +151,13 @@ private fun ChapterNavRow(curIdx: Int, series: List<Pair<String, String>>, dest:
         if (curIdx > 0) {
             OutlinedButton(onClick = {
                 router.pop()
-                router.push(ReaderDest(series[curIdx - 1].first, dest.albumTitle))
+                router.push(ReaderDest(series[curIdx - 1].first, dest.albumTitle, dest.albumId))
             }) { Text("上一章", color = Pink) }
         } else Spacer(Modifier.width(1.dp))
         if (curIdx >= 0 && curIdx < series.size - 1) {
             Button(onClick = {
                 router.pop()
-                router.push(ReaderDest(series[curIdx + 1].first, dest.albumTitle))
+                router.push(ReaderDest(series[curIdx + 1].first, dest.albumTitle, dest.albumId))
             }, colors = ButtonDefaults.buttonColors(containerColor = Pink)) {
                 Text("下一章", color = androidx.compose.ui.graphics.Color.White)
             }
@@ -115,12 +167,15 @@ private fun ChapterNavRow(curIdx: Int, series: List<Pair<String, String>>, dest:
 
 @Composable
 private fun ReaderPage(chapterId: String, file: String) {
-    var bmp by remember(chapterId, file) { mutableStateOf<Bitmap?>(null) }
+    var bmp by remember(chapterId, file) { mutableStateOf<Bitmap?>(ReaderCache.get(chapterId, file)) }
     var failed by remember(chapterId, file) { mutableStateOf(false) }
     LaunchedEffect(chapterId, file) {
+        if (bmp != null) return@LaunchedEffect
         try {
             val bytes = JmApi.fetchBytes(JmApi.photoUrl(chapterId, file))
-            bmp = Descramble.decode(bytes, chapterId, file)
+            val decoded = Descramble.decode(bytes, chapterId, file)
+            ReaderCache.put(chapterId, file, decoded)
+            bmp = decoded
         } catch (e: Exception) { failed = true }
     }
     val b = bmp

@@ -140,8 +140,36 @@ fun ProfileScreen(router: Router, account: AccountStore, library: LibraryStore) 
             CheckinCard(account)
         }
 
+        ReadingStatsCard()
         Spacer(Modifier.height(18.dp))
         FavoritesSection(router, account, library, loggedIn, onCloudTotal = { stats = account.stats })
+    }
+}
+
+@Composable
+fun ReadingStatsCard() {
+    fun fmtSeconds(s: Int): String = when {
+        s < 3600 -> "${s / 60} 分钟"
+        s % 3600 / 60 == 0 -> "${s / 3600} 小时"
+        else -> "${s / 3600} 小时 ${s % 3600 / 60} 分"
+    }
+    IosCard(radius = 18.dp, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        Column(Modifier.padding(16.dp)) {
+            Text("阅读统计", fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(10.dp))
+            Row {
+                listOf("读过" to "${ReadingStats.albumCount} 本", "章节" to "${ReadingStats.chapterCount} 话",
+                    "页数" to "${ReadingStats.pagesRead}", "时长" to fmtSeconds(ReadingStats.secondsRead)).forEach { (lb, v) ->
+                    Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(lb, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(v, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Pink,
+                            modifier = Modifier.padding(top = 2.dp))
+                    }
+                }
+            }
+            Text("从这版开始统计，本机记录", fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
+        }
     }
 }
 
@@ -270,7 +298,10 @@ fun FavoritesSection(router: Router, account: AccountStore, library: LibraryStor
     var folders by remember { mutableStateOf<List<JmApi.Folder>>(listOf(JmApi.Folder("0", "默认收藏"))) }
     var folderId by remember { mutableStateOf("0") }
     var cloudReload by remember { mutableIntStateOf(0) }
+    val context = LocalContext.current
     var moveMode by remember { mutableStateOf(false) }
+    var selectMode by remember { mutableStateOf(false) }
+    var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var pendingMove by remember { mutableStateOf<JmApi.Album?>(null) }
     var confirmDelete by remember { mutableStateOf<JmApi.Folder?>(null) }
     var showCreate by remember { mutableStateOf(false) }
@@ -328,9 +359,16 @@ fun FavoritesSection(router: Router, account: AccountStore, library: LibraryStor
             colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Pink, selectedLabelColor = Color.White))
         Spacer(Modifier.weight(1f))
         if (loggedIn && tab == 0) {
-            TextButton(onClick = { moveMode = !moveMode }) {
+            TextButton(onClick = { moveMode = !moveMode; if (moveMode) selectMode = false }) {
                 Text(if (moveMode) "完成" else "整理", color = Pink, fontSize = 13.sp)
             }
+        }
+        TextButton(onClick = {
+            selectMode = !selectMode
+            if (selectMode) moveMode = false
+            selectedIds = emptySet()
+        }) {
+            Text(if (selectMode) "取消" else "批量下载", color = Pink, fontSize = 13.sp)
         }
     }
     if (loggedIn && tab == 0) {
@@ -395,7 +433,37 @@ fun FavoritesSection(router: Router, account: AccountStore, library: LibraryStor
                     if (moveMode && tab == 0 && loggedIn) {
                         Box(Modifier.matchParentSize().clickable { pendingMove = album })
                     }
+                    if (selectMode) {
+                        Box(Modifier.matchParentSize().clickable {
+                            selectedIds = if (selectedIds.contains(album.id)) selectedIds - album.id else selectedIds + album.id
+                        })
+                        if (selectedIds.contains(album.id)) {
+                            Surface(shape = CircleShape, color = Pink,
+                                modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).size(20.dp)) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text("✓", color = Color.White, fontSize = 12.sp)
+                                }
+                            }
+                        }
+                    }
                 }
+            }
+        }
+    }
+
+    if (selectMode) {
+        Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("已选 ${selectedIds.size} 本", fontSize = 13.sp)
+            Spacer(Modifier.weight(1f))
+            Button(onClick = {
+                val chosen = filtered.filter { selectedIds.contains(it.id) }
+                chosen.forEach { DownloadManager.enqueue(context, it) }
+                msg = "已把 ${chosen.size} 本加入下载，去下载页看进度"
+                selectMode = false
+                selectedIds = emptySet()
+            }, enabled = selectedIds.isNotEmpty(),
+                colors = ButtonDefaults.buttonColors(containerColor = Pink)) {
+                Text("下载已选", color = Color.White, fontSize = 13.sp)
             }
         }
     }
@@ -479,6 +547,7 @@ fun FavoritesSection(router: Router, account: AccountStore, library: LibraryStor
 }
 
 // ---------------- Detail ----------------
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun DetailScreen(dest: DetailDest, router: Router, account: AccountStore, library: LibraryStore) {
     val scope = rememberCoroutineScope()
@@ -498,7 +567,11 @@ fun DetailScreen(dest: DetailDest, router: Router, account: AccountStore, librar
             val t = dd.optJSONArray("tags")
             val tl = mutableListOf<String>()
             if (t != null) for (i in 0 until t.length()) tl.add(t.optString(i))
-            BlockTags.remember(dest.id, tl)
+            val al = mutableListOf<String>()
+            val aa = dd.opt("author")
+            if (aa is org.json.JSONArray) for (i in 0 until aa.length()) al.add(aa.optString(i))
+            else if (aa is String && aa.isNotEmpty()) al.add(aa)
+            BlockTags.remember(dest.id, tl, al)
         } catch (e: Exception) { error = e.message }
         fav = library.isFavorite(dest.id)
     }
@@ -537,7 +610,9 @@ fun DetailScreen(dest: DetailDest, router: Router, account: AccountStore, librar
                             authors.forEach { au ->
                                 Surface(shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.surface,
                                     border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                                    modifier = Modifier.clickable { router.push(AuthorDest(au)) }) {
+                                    modifier = Modifier.combinedClickable(
+                                        onClick = { router.push(AuthorDest(au)) },
+                                        onLongClick = { BlockTags.addAuthor(au); toast = "已屏蔽作者「$au」，列表里将不再显示" })) {
                                     Text(au, fontSize = 13.sp, color = Pink, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp))
                                 }
                             }
@@ -556,7 +631,7 @@ fun DetailScreen(dest: DetailDest, router: Router, account: AccountStore, librar
                     }
                     Spacer(Modifier.height(16.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Button(onClick = { if (chapters.isNotEmpty()) router.push(ReaderDest(chapters.first().first, name)) },
+                        Button(onClick = { if (chapters.isNotEmpty()) router.push(ReaderDest(chapters.first().first, name, dest.id)) },
                             shape = RoundedCornerShape(14.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = Pink)) { Text("开始阅读", color = Color.White) }
                         OutlinedButton(onClick = {
@@ -611,7 +686,7 @@ fun DetailScreen(dest: DetailDest, router: Router, account: AccountStore, librar
                     IosCard(radius = 18.dp, modifier = Modifier.fillMaxWidth()) {
                         Column {
                             chapters.forEachIndexed { idx, (cid, cname) ->
-                                Row(Modifier.fillMaxWidth().clickable { router.push(ReaderDest(cid, name)) }
+                                Row(Modifier.fillMaxWidth().clickable { router.push(ReaderDest(cid, name, dest.id)) }
                                     .padding(horizontal = 16.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
                                     Text(cname.ifEmpty { "第 ${idx + 1} 话" }, fontSize = 14.sp)
                                     Spacer(Modifier.weight(1f))
@@ -727,9 +802,12 @@ fun DownloadsScreen(router: Router) {
 @Composable
 fun BlockedTagsScreen(router: Router) {
     var input by remember { mutableStateOf("") }
+    var authorInput by remember { mutableStateOf("") }
     Column(Modifier.fillMaxSize()) {
-        TopBar(title = "屏蔽标签") { router.pop() }
+        TopBar(title = "屏蔽标签与作者") { router.pop() }
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+            Text("屏蔽标签", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+            Spacer(Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 OutlinedTextField(input, { input = it }, placeholder = { Text("输入要屏蔽的标签") },
                     singleLine = true, modifier = Modifier.weight(1f))
@@ -753,8 +831,34 @@ fun BlockedTagsScreen(router: Router) {
                     HorizontalDivider(thickness = 0.5.dp)
                 }
             }
+            Spacer(Modifier.height(20.dp))
+            Text("屏蔽作者", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(authorInput, { authorInput = it }, placeholder = { Text("输入要屏蔽的作者") },
+                    singleLine = true, modifier = Modifier.weight(1f))
+                Spacer(Modifier.width(8.dp))
+                Button(onClick = { BlockTags.addAuthor(authorInput); authorInput = "" }, enabled = authorInput.isNotBlank(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Pink)) {
+                    Text("添加", color = Color.White)
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            if (BlockTags.blockedAuthors.isEmpty()) {
+                Text("还没有屏蔽任何作者。在漫画详情页长按作者也可以快速屏蔽。",
+                    fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                BlockTags.blockedAuthors.forEach { au ->
+                    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(au, fontSize = 14.sp)
+                        Spacer(Modifier.weight(1f))
+                        TextButton(onClick = { BlockTags.removeAuthor(au) }) { Text("取消屏蔽", color = Pink, fontSize = 12.sp) }
+                    }
+                    HorizontalDivider(thickness = 0.5.dp)
+                }
+            }
             Spacer(Modifier.height(14.dp))
-            Text("在首页、分类、搜索等列表中，标题或作者含屏蔽词的作品会直接隐藏；作品的真实标签会随着浏览自动记录，之后按标签过滤。收藏与历史不受影响。",
+            Text("在首页、分类、搜索等列表中，命中屏蔽标签或屏蔽作者的作品会直接隐藏；作品的真实标签与作者会随着浏览自动记录，之后按标签/作者过滤。收藏与历史不受影响。",
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }

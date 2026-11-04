@@ -55,10 +55,10 @@ fun SettingsScreen(router: Router, account: AccountStore) {
             Spacer(Modifier.height(10.dp))
             IosCard(radius = 16.dp, onClick = { router.push(BlockedTagsDest) }, modifier = Modifier.fillMaxWidth()) {
                 Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("屏蔽标签", fontSize = 16.sp)
+                    Text("屏蔽标签与作者", fontSize = 16.sp)
                     Spacer(Modifier.weight(1f))
-                    if (BlockTags.blockedTags.isNotEmpty()) {
-                        Text("${BlockTags.blockedTags.size} 个", fontSize = 12.sp,
+                    if (BlockTags.blockedTags.isNotEmpty() || BlockTags.blockedAuthors.isNotEmpty()) {
+                        Text("${BlockTags.blockedTags.size + BlockTags.blockedAuthors.size} 个", fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Text(" ›", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -77,7 +77,7 @@ fun SettingsScreen(router: Router, account: AccountStore) {
                 }
             }
             Spacer(Modifier.height(24.dp))
-            Text("JM Reader Android v2.17", fontSize = 12.sp,
+            Text("JM Reader Android v2.18", fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.align(Alignment.CenterHorizontally))
         }

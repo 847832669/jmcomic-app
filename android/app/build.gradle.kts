@@ -12,8 +12,8 @@ android {
         applicationId = "com.denia.jmreader"
         minSdk = 26
         targetSdk = 34
-        versionCode = 11
-        versionName = "2.17"
+        versionCode = 12
+        versionName = "2.18"
     }
 
     // Persistent debug key (kept OUTSIDE the repo, in the local workspace) so

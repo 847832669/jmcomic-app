@@ -87,7 +87,7 @@ fun JmApp(externalPdf: android.net.Uri? = null, onExternalPdfDone: () -> Unit = 
     val account = remember { AccountStore(context).apply { syncApi() } }
     val library = remember { LibraryStore(context) }
     val history = remember { HistoryStore(context) }
-    remember { BlockTags.init(context) }
+    remember { BlockTags.init(context); ReadingStats.init(context) }
     remember { Lines.init(context) }
     remember { Settings.init(context) }
     remember { FolderRegistry.init(context) }
