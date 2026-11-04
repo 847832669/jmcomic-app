@@ -796,10 +796,14 @@ final class SearchHistory: ObservableObject {
 final class BlockTagStore: ObservableObject {
     @Published private(set) var blockedTags: [String] = []
     @Published private(set) var tagCache: [String: [String]] = [:]
+    @Published private(set) var blockedAuthors: [String] = []
+    @Published private(set) var authorCache: [String: [String]] = [:]
     private var inFlight: Set<String> = []
 
     private let listKey = "jm.blockedTags.v1"
     private let cacheKey = "jm.tagCache.v1"
+    private let authorListKey = "jm.blockedAuthors.v1"
+    private let authorCacheKey = "jm.authorCache.v1"
 
     init() {
         if let arr = UserDefaults.standard.array(forKey: listKey) as? [String] {
@@ -808,6 +812,13 @@ final class BlockTagStore: ObservableObject {
         if let data = UserDefaults.standard.data(forKey: cacheKey),
            let map = try? JSONDecoder().decode([String: [String]].self, from: data) {
             tagCache = map
+        }
+        if let arr = UserDefaults.standard.array(forKey: authorListKey) as? [String] {
+            blockedAuthors = arr
+        }
+        if let data = UserDefaults.standard.data(forKey: authorCacheKey),
+           let map = try? JSONDecoder().decode([String: [String]].self, from: data) {
+            authorCache = map
         }
     }
 
@@ -823,28 +834,54 @@ final class BlockTagStore: ObservableObject {
         UserDefaults.standard.set(blockedTags, forKey: listKey)
     }
 
-    /// Record tags learned from an album detail fetch (empty is recorded
-    /// too, so tag-less albums are not refetched forever).
-    func remember(albumId: String, tags: [String]) {
-        guard tagCache[albumId] != tags else { return }
-        tagCache[albumId] = tags
-        if let data = try? JSONEncoder().encode(tagCache) {
-            UserDefaults.standard.set(data, forKey: cacheKey)
+    func addAuthor(_ raw: String) {
+        let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty, !blockedAuthors.contains(t) else { return }
+        blockedAuthors.append(t)
+        UserDefaults.standard.set(blockedAuthors, forKey: authorListKey)
+    }
+
+    func removeAuthor(_ author: String) {
+        blockedAuthors.removeAll { $0 == author }
+        UserDefaults.standard.set(blockedAuthors, forKey: authorListKey)
+    }
+
+    /// Record tags/authors learned from an album detail fetch (empty is
+    /// recorded too, so tag-less albums are not refetched forever).
+    func remember(albumId: String, tags: [String], authors: [String]) {
+        if tagCache[albumId] != tags {
+            tagCache[albumId] = tags
+            if let data = try? JSONEncoder().encode(tagCache) {
+                UserDefaults.standard.set(data, forKey: cacheKey)
+            }
+        }
+        if authorCache[albumId] != authors {
+            authorCache[albumId] = authors
+            if let data = try? JSONEncoder().encode(authorCache) {
+                UserDefaults.standard.set(data, forKey: authorCacheKey)
+            }
         }
     }
 
     func isBlocked(_ comic: Comic) -> Bool {
-        guard !blockedTags.isEmpty else { return false }
+        guard !blockedTags.isEmpty || !blockedAuthors.isEmpty else { return false }
         let hay = comic.name + "\n" + comic.author + "\n" + comic.categoryTitle
         for t in blockedTags where hay.localizedCaseInsensitiveContains(t) { return true }
         if let tags = tagCache[comic.id] {
             for t in blockedTags where tags.contains(t) { return true }
         }
+        for a in blockedAuthors where comic.author.localizedCaseInsensitiveContains(a) { return true }
+        if let authors = authorCache[comic.id] {
+            for a in blockedAuthors
+            where authors.contains(where: { $0.localizedCaseInsensitiveCompare(a) == .orderedSame }) {
+                return true
+            }
+        }
         return false
     }
 
     func visible(_ items: [Comic]) -> [Comic] {
-        guard !blockedTags.isEmpty else { return items }
+        guard !blockedTags.isEmpty || !blockedAuthors.isEmpty else { return items }
         return items.filter { !isBlocked($0) }
     }
 
@@ -852,33 +889,101 @@ final class BlockTagStore: ObservableObject {
     /// unknown (4 at a time, at most 40 per call). Once known, the
     /// tag-based filter applies to them here and on future visits.
     func prefetch(_ items: [Comic]) {
-        guard !blockedTags.isEmpty else { return }
-        let unknown = items.map(\.id).filter { tagCache[$0] == nil && !inFlight.contains($0) }
+        guard !blockedTags.isEmpty || !blockedAuthors.isEmpty else { return }
+        let unknown = items.map(\.id).filter {
+            (tagCache[$0] == nil || authorCache[$0] == nil) && !inFlight.contains($0)
+        }
         guard !unknown.isEmpty else { return }
         let batch = Array(unknown.prefix(24))
         batch.forEach { inFlight.insert($0) }
         Task {
             for chunkStart in stride(from: 0, to: batch.count, by: 3) {
                 let chunk = Array(batch[chunkStart..<min(chunkStart + 3, batch.count)])
-                let results = await withTaskGroup(of: (String, [String]?).self) { group in
+                let results = await withTaskGroup(of: (String, [String]?, [String]?).self) { group in
                     for id in chunk {
                         group.addTask {
                             let d = try? await JMClient.shared.album(id: id)
-                            return (id, d?.tags)
+                            return (id, d?.tags, d?.authors)
                         }
                     }
-                    var out: [(String, [String]?)] = []
+                    var out: [(String, [String]?, [String]?)] = []
                     for await r in group { out.append(r) }
                     return out
                 }
-                // Remember fetched albums even when their tag list is empty —
-                // otherwise tagless albums were re-fetched on every appearance.
+                // Remember fetched albums even when their tag/author lists are
+                // empty — otherwise they were re-fetched on every appearance.
                 // Failures (nil) stay uncached and retry another time.
-                for (id, tags) in results {
-                    if let tags { self.remember(albumId: id, tags: tags) }
+                for (id, tags, authors) in results {
+                    if let tags, let authors { self.remember(albumId: id, tags: tags, authors: authors) }
                 }
             }
             batch.forEach { self.inFlight.remove($0) }
         }
+    }
+}
+
+// MARK: - reading stats
+
+/// Local reading statistics: distinct albums/episodes opened in the reader,
+/// total pages across first-opened episodes, and time spent with the reader
+/// open. Counted from v2.18 on; nothing is backfilled from earlier reading.
+@MainActor
+final class ReadingStatsStore: ObservableObject {
+    @Published private(set) var albumCount = 0
+    @Published private(set) var chapterCount = 0
+    @Published private(set) var pagesRead = 0
+    @Published private(set) var secondsRead = 0
+
+    private struct Snapshot: Codable {
+        var albums: [String] = []
+        var chapters: [String] = []
+        var pages: Int = 0
+        var seconds: Int = 0
+    }
+    private var snap = Snapshot()
+    private let key = "jm.readStats.v1"
+
+    init() {
+        if let data = UserDefaults.standard.data(forKey: key),
+           let s = try? JSONDecoder().decode(Snapshot.self, from: data) {
+            snap = s
+        }
+        publish()
+    }
+
+    private func publish() {
+        albumCount = snap.albums.count
+        chapterCount = snap.chapters.count
+        pagesRead = snap.pages
+        secondsRead = snap.seconds
+    }
+
+    private func persist() {
+        if let data = try? JSONEncoder().encode(snap) {
+            UserDefaults.standard.set(data, forKey: key)
+        }
+        publish()
+    }
+
+    /// Called when a chapter opens in the reader. Each episode counts once;
+    /// its pages are added the first time it is opened.
+    func recordChapter(albumId: String, episodeId: String, pages: Int) {
+        var changed = false
+        if !snap.albums.contains(albumId) {
+            snap.albums.append(albumId)
+            changed = true
+        }
+        if !snap.chapters.contains(episodeId) {
+            snap.chapters.append(episodeId)
+            snap.pages += pages
+            changed = true
+        }
+        if changed { persist() }
+    }
+
+    func addSeconds(_ s: Int) {
+        guard s > 0 else { return }
+        snap.seconds += s
+        persist()
     }
 }

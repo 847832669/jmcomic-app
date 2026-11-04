@@ -12,6 +12,7 @@ struct ReaderView: View {
     let route: ReaderRoute
     @EnvironmentObject var library: LibraryStore
     @EnvironmentObject var appState: AppState
+    @EnvironmentObject var readingStats: ReadingStatsStore
     @Environment(\.dismiss) private var dismiss
 
     @State private var chapterId: String = ""
@@ -26,6 +27,9 @@ struct ReaderView: View {
     @State private var sliderValue: Double = 0
     @State private var didInit = false
     @State private var displayIndex: Int = 0
+    /// Chapters fetched ahead of time (the next-chapter preload fills this),
+    /// so stepping to the next chapter doesn't wait on the network.
+    @State private var chapterCache: [String: ChapterData] = [:]
     @AppStorage("reader.mode") private var readerMode = "scroll"   // scroll | page
     @AppStorage("reader.rtl") private var readerRTL = false
 
@@ -56,6 +60,15 @@ struct ReaderView: View {
             if !didInit {
                 didInit = true
                 await openChapter(id: route.startChapterId, page: route.startPage)
+            }
+        }
+        .task {
+            // Reading-time statistics: accrue 10 s at a time while the
+            // reader is on screen; the task dies with the view.
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 10_000_000_000)
+                if Task.isCancelled { break }
+                readingStats.addSeconds(10)
             }
         }
     }
@@ -222,30 +235,62 @@ struct ReaderView: View {
     // MARK: - actions
 
     private func openChapter(id: String, page: Int) async {
+        if let cached = chapterCache[id] {
+            applyChapter(cached, id: id, page: page)
+            return
+        }
         loading = true
         loadFailed = false
         do {
             let ch = try await JMClient.shared.chapter(id: id)
-            chapterId = id
-            chapterName = ch.name
-            pages = ch.images
-            if !ch.series.isEmpty { seriesFromAPI = ch.series }
-            currentPage = 0
-            sliderValue = 0
-            displayIndex = displayIndex(forLogical: 0)
-            loading = false
-            if page > 0 && page < ch.images.count {
-                // give layout a beat, then jump
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                    currentPage = page
-                    sliderValue = Double(page)
-                    jumpTarget = page
-                }
-            }
-            if !ch.images.isEmpty { prefetch(after: -1) }
+            chapterCache[id] = ch
+            applyChapter(ch, id: id, page: page)
         } catch {
             loading = false
             loadFailed = true
+        }
+    }
+
+    private func applyChapter(_ ch: ChapterData, id: String, page: Int) {
+        chapterId = id
+        chapterName = ch.name
+        pages = ch.images
+        if !ch.series.isEmpty { seriesFromAPI = ch.series }
+        currentPage = 0
+        sliderValue = 0
+        displayIndex = displayIndex(forLogical: 0)
+        loading = false
+        loadFailed = false
+        readingStats.recordChapter(albumId: route.albumId, episodeId: id, pages: ch.images.count)
+        if page > 0 && page < ch.images.count {
+            // give layout a beat, then jump
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                currentPage = page
+                sliderValue = Double(page)
+                jumpTarget = page
+            }
+        }
+        if !ch.images.isEmpty { prefetch(after: -1) }
+        preloadNextChapter()
+    }
+
+    /// Fetch the next chapter's data and warm the image cache for all of its
+    /// pages while the user reads the current one, so "下一话" opens
+    /// instantly. Runs once per chapter (the cache check dedupes).
+    private func preloadNextChapter() {
+        guard let idx = chapterIndex else { return }
+        let nextIdx = idx + 1
+        guard chapters.indices.contains(nextIdx) else { return }
+        let nextId = chapters[nextIdx].id
+        guard chapterCache[nextId] == nil else { return }
+        Task {
+            guard let ch = try? await JMClient.shared.chapter(id: nextId) else { return }
+            chapterCache[nextId] = ch
+            for file in ch.images {
+                let stem = (file as NSString).deletingPathExtension
+                ImagePipe.shared.preload(path: ImagePipe.pagePath(chapterId: nextId, file: file),
+                                         scrambleNum: ImagePipe.splitNum(chapterId: nextId, stem: stem))
+            }
         }
     }
 

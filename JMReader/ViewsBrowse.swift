@@ -28,6 +28,9 @@ struct RemoteImage: View {
 struct ComicCell: View {
     let comic: Comic
     var columns: Int = 2
+    /// Batch-select mode (favorites): shows a check badge on the cover.
+    var selecting: Bool = false
+    var selected: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -41,6 +44,15 @@ struct ComicCell: View {
                             .font(.caption2).padding(.horizontal, 6).padding(.vertical, 3)
                             .background(Color.black.opacity(0.55)).foregroundColor(.white)
                             .cornerRadius(5).padding(6)
+                    }
+                }
+                .overlay(alignment: .topTrailing) {
+                    if selecting {
+                        Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                            .font(.title3)
+                            .foregroundColor(selected ? accentPink : .white)
+                            .shadow(color: .black.opacity(0.45), radius: 3)
+                            .padding(6)
                     }
                 }
             Text(comic.name)
@@ -65,6 +77,10 @@ struct ComicGrid: View {
     /// When set, cells get a "移动到收藏夹" context menu (cloud favorites only).
     var folders: [FavFolder] = []
     var onMoveToFolder: ((Comic, String) -> Void)? = nil
+    /// Batch-select mode: cells toggle selection instead of navigating.
+    var selecting: Bool = false
+    var selectedIds: Set<String> = []
+    var onToggleSelect: ((Comic) -> Void)? = nil
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var blockStore: BlockTagStore
 
@@ -74,18 +90,27 @@ struct ComicGrid: View {
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: cols >= 4 ? 8 : 13), count: cols),
                   spacing: cols >= 4 ? 12 : 18) {
             ForEach(shown) { comic in
-                NavigationLink(value: comic.id) { ComicCell(comic: comic, columns: cols) }
+                if selecting {
+                    Button { onToggleSelect?(comic) } label: {
+                        ComicCell(comic: comic, columns: cols,
+                                  selecting: true, selected: selectedIds.contains(comic.id))
+                    }
                     .buttonStyle(.plain)
                     .onAppear { if comic.id == shown.last?.id { onLastAppear?() } }
-                    .contextMenu {
-                        if let onMoveToFolder, !folders.isEmpty {
-                            Menu("移动到收藏夹") {
-                                ForEach(folders) { f in
-                                    Button(f.name) { onMoveToFolder(comic, f.id) }
+                } else {
+                    NavigationLink(value: comic.id) { ComicCell(comic: comic, columns: cols) }
+                        .buttonStyle(.plain)
+                        .onAppear { if comic.id == shown.last?.id { onLastAppear?() } }
+                        .contextMenu {
+                            if let onMoveToFolder, !folders.isEmpty {
+                                Menu("移动到收藏夹") {
+                                    ForEach(folders) { f in
+                                        Button(f.name) { onMoveToFolder(comic, f.id) }
+                                    }
                                 }
                             }
                         }
-                    }
+                }
             }
         }
         .padding(.horizontal, cols >= 4 ? 10 : 14)
@@ -697,10 +722,31 @@ struct FlowChips: View {
 struct BlockedTagsView: View {
     @EnvironmentObject var blockStore: BlockTagStore
     @State private var newTag = ""
+    @State private var newAuthor = ""
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
+                Text("作者").font(.headline)
+                HStack(spacing: 8) {
+                    TextField("输入要屏蔽的作者", text: $newAuthor)
+                        .padding(.horizontal, 10).padding(.vertical, 8)
+                        .background(Color.white.opacity(0.08)).cornerRadius(10)
+                        .onSubmit { addNewAuthor() }
+                    Button("添加") { addNewAuthor() }
+                        .fontWeight(.semibold)
+                        .disabled(newAuthor.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+                if blockStore.blockedAuthors.isEmpty {
+                    Text("还没有屏蔽任何作者。在漫画详情页长按作者也可以快速屏蔽。")
+                        .foregroundColor(.secondary)
+                } else {
+                    Text("长按可取消屏蔽").font(.caption).foregroundColor(.secondary)
+                    FlowChips(items: blockStore.blockedAuthors,
+                              actionTitle: "取消屏蔽",
+                              onAction: { blockStore.removeAuthor($0) }) { _ in }
+                }
+                Text("标签").font(.headline).padding(.top, 8)
                 HStack(spacing: 8) {
                     TextField("输入要屏蔽的标签", text: $newTag)
                         .padding(.horizontal, 10).padding(.vertical, 8)
@@ -719,20 +765,25 @@ struct BlockedTagsView: View {
                               actionTitle: "取消屏蔽",
                               onAction: { blockStore.remove($0) }) { _ in }
                 }
-                Text("在首页、分类、搜索等列表中，标题或作者含屏蔽词的作品会直接隐藏；作品的真实标签会随着浏览自动记录，之后按标签过滤。收藏与历史不受影响。")
+                Text("在首页、分类、搜索等列表中，作者命中屏蔽名单、或标题/作者/真实标签含屏蔽词的作品会直接隐藏；作品的作者与标签会随着浏览自动记录。收藏与历史不受影响。")
                     .font(.caption).foregroundColor(.secondary)
                     .padding(.top, 6)
             }
             .padding(16)
         }
         .tabMinimizeOnScroll()
-        .navigationTitle("屏蔽标签")
+        .navigationTitle("屏蔽标签与作者")
         .navigationBarTitleDisplayMode(.inline)
     }
 
     private func addNew() {
         blockStore.add(newTag)
         newTag = ""
+    }
+
+    private func addNewAuthor() {
+        blockStore.addAuthor(newAuthor)
+        newAuthor = ""
     }
 }
 
@@ -809,7 +860,10 @@ struct FavoritesView: View {
     @EnvironmentObject var library: LibraryStore
     @EnvironmentObject var account: AccountStore
     @EnvironmentObject var blockStore: BlockTagStore
+    @EnvironmentObject var downloads: DownloadManager
     @State private var showLogin = false
+    @State private var selecting = false
+    @State private var selectedIds: Set<String> = []
     @State private var favQuery = ""
     @State private var showNewFolder = false
     @State private var newFolderName = ""
@@ -829,6 +883,7 @@ struct FavoritesView: View {
                     accountHeader
                     ProfileStatsCard()
                     CheckinCard()
+                    ReadingStatsCard()
                     historyEntry
                     favControls
                     if account.isLoggedIn {
@@ -849,6 +904,15 @@ struct FavoritesView: View {
                                       folders: account.displayFolders,
                                       onMoveToFolder: { comic, fid in
                                           Task { await account.moveFavorite(aid: comic.id, toFolder: fid) }
+                                      },
+                                      selecting: selecting,
+                                      selectedIds: selectedIds,
+                                      onToggleSelect: { comic in
+                                          if selectedIds.contains(comic.id) {
+                                              selectedIds.remove(comic.id)
+                                          } else {
+                                              selectedIds.insert(comic.id)
+                                          }
                                       })
                         }
                         if account.cloudLoading { ProgressView().padding() }
@@ -870,6 +934,9 @@ struct FavoritesView: View {
                     }
                 }
                 .padding(.bottom, 20)
+            }
+            .safeAreaInset(edge: .bottom) {
+                if selecting { batchBar }
             }
             .tabMinimizeOnScroll()
             .navigationTitle("个人")
@@ -971,8 +1038,48 @@ struct FavoritesView: View {
                 .padding(.horizontal, 10).padding(.vertical, 7)
                 .glassSurface(Capsule(), interactive: true)
             }
+            if account.isLoggedIn {
+                Button {
+                    selecting.toggle()
+                    if !selecting { selectedIds.removeAll() }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.down.circle").font(.caption)
+                        Text(selecting ? "取消批量" : "批量下载").font(.caption.weight(.semibold))
+                    }
+                    .padding(.horizontal, 10).padding(.vertical, 7)
+                    .glassSurface(Capsule(), interactive: true)
+                }
+                .buttonStyle(.plain)
+            }
         }
         .padding(.horizontal, 16).padding(.top, 14)
+    }
+
+    private var batchBar: some View {
+        HStack(spacing: 12) {
+            Text("已选 \(selectedIds.count) 本")
+                .font(.subheadline.weight(.semibold))
+            Spacer()
+            Button("下载已选") { downloadSelected() }
+                .font(.subheadline.weight(.bold))
+                .foregroundColor(.white)
+                .padding(.horizontal, 16).padding(.vertical, 9)
+                .background(selectedIds.isEmpty ? Color.gray : accentPink)
+                .clipShape(Capsule())
+                .disabled(selectedIds.isEmpty)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 10)
+        .glassSurface(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .padding(.horizontal, 12).padding(.bottom, 6)
+    }
+
+    private func downloadSelected() {
+        for comic in shownCloud where selectedIds.contains(comic.id) {
+            downloads.enqueue(albumId: comic.id, title: comic.name)
+        }
+        selecting = false
+        selectedIds.removeAll()
     }
 
     private var folderChips: some View {
@@ -1231,6 +1338,11 @@ struct DetailView: View {
                                 .clipShape(Capsule())
                         }
                         .buttonStyle(.plain)
+                        .contextMenu {
+                            Button(role: .destructive) { blockStore.addAuthor(a) } label: {
+                                Label("屏蔽该作者", systemImage: "eye.slash")
+                            }
+                        }
                     }
                 }
             }
@@ -1317,7 +1429,7 @@ struct DetailView: View {
         do {
             let d = try await JMClient.shared.album(id: albumId)
             detail = d
-            blockStore.remember(albumId: d.id, tags: d.tags)
+            blockStore.remember(albumId: d.id, tags: d.tags, authors: d.authors)
             cloudFav = d.isFavorite
         } catch { loadFailed = true }
     }
@@ -1446,6 +1558,50 @@ struct StorageView: View {
     }
 }
 
+// MARK: - reading stats card (个人 page)
+
+struct ReadingStatsCard: View {
+    @EnvironmentObject var stats: ReadingStatsStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("阅读统计").font(.subheadline.weight(.semibold))
+            if stats.albumCount == 0 {
+                Text("开始阅读后，这里会统计你读过的漫画、章节和时长")
+                    .font(.caption).foregroundColor(.secondary)
+            } else {
+                HStack(spacing: 0) {
+                    stat("读过", "\(stats.albumCount) 本")
+                    stat("章节", "\(stats.chapterCount) 话")
+                    stat("页数", "\(stats.pagesRead) 页")
+                    stat("时长", durationText)
+                }
+            }
+        }
+        .padding(.vertical, 13).padding(.horizontal, 14)
+        .glassSurface(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .padding(.horizontal, 16)
+        .padding(.top, 14)
+    }
+
+    private var durationText: String {
+        let m = stats.secondsRead / 60
+        if m < 60 { return "\(m) 分钟" }
+        return "\(m / 60) 小时 \(m % 60) 分"
+    }
+
+    private func stat(_ label: String, _ value: String) -> some View {
+        VStack(spacing: 4) {
+            Text(label).font(.caption).foregroundColor(.secondary)
+            Text(value)
+                .font(.system(.subheadline, design: .rounded).weight(.bold))
+                .foregroundColor(accentPink)
+                .lineLimit(1).minimumScaleFactor(0.65)
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
 // MARK: - profile stats strip (个人 page)
 
 struct ProfileStatsCard: View {
@@ -1559,8 +1715,9 @@ struct SettingsView: View {
                         StorageView()
                     }
                     Divider().padding(.leading, 52)
-                    navRow(icon: "eye.slash", title: "屏蔽标签",
-                           value: blockStore.blockedTags.isEmpty ? nil : "\(blockStore.blockedTags.count) 个") {
+                    navRow(icon: "eye.slash", title: "屏蔽标签与作者",
+                           value: (blockStore.blockedTags.count + blockStore.blockedAuthors.count) == 0
+                               ? nil : "\(blockStore.blockedTags.count + blockStore.blockedAuthors.count) 项") {
                         BlockedTagsView()
                     }
                 }

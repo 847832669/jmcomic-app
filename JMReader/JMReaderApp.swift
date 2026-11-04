@@ -8,6 +8,7 @@ struct JMReaderApp: App {
     @StateObject private var account = AccountStore()
     @StateObject private var downloads = DownloadManager()
     @StateObject private var blockStore = BlockTagStore()
+    @StateObject private var readingStats = ReadingStatsStore()
 
     var body: some Scene {
         WindowGroup {
@@ -37,6 +38,7 @@ struct JMReaderApp: App {
             .environmentObject(account)
             .environmentObject(downloads)
             .environmentObject(blockStore)
+            .environmentObject(readingStats)
         }
     }
 }
