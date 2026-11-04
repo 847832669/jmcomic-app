@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import Security
+import CryptoKit
 
 enum Keychain {
     private static let service = "com.denia.jmreader.auth"
@@ -35,6 +36,46 @@ enum Keychain {
                                     kSecAttrService as String: service,
                                     kSecAttrAccount as String: key]
         SecItemDelete(query as CFDictionary)
+    }
+}
+
+/// Cloud copy of the deleted-folder list, hosted on the user's own
+/// Cloudflare Worker (the anireader-sync deployment, route
+/// /jm/folders). JM's server-side folder delete is broken and its
+/// folder_list disagrees across hosts, so the authoritative
+/// "deleted" state lives here: shared across devices, immune to
+/// reinstalls. The local tombstone map in AccountStore remains
+/// the always-on cache and offline fallback — this client is only
+/// ever consulted to merge MORE ids in, never to un-hide one.
+private enum FolderRegistry {
+    static let endpoint = URL(string: "https://anireader-sync.peimingliang8.workers.dev/jm/folders")!
+
+    /// Capability key derived locally from the JM account; the
+    /// server only ever sees this hash, never the name or uid.
+    static func accountKey(username: String, uid: Int) -> String {
+        SHA256.hash(data: Data("\(username):\(uid)".utf8))
+            .map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func fetchDeleted(key: String) async -> [String]? {
+        var comps = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)!
+        comps.queryItems = [URLQueryItem(name: "acct", value: key)]
+        var req = URLRequest(url: comps.url!)
+        req.timeoutInterval = 10
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              (resp as? HTTPURLResponse)?.statusCode == 200,
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let list = obj["deleted"] as? [Any] else { return nil }
+        return list.compactMap { $0 as? String }
+    }
+
+    static func reportDeleted(key: String, folderId: String) async {
+        var req = URLRequest(url: endpoint)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 10
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["acct": key, "add": [folderId]])
+        _ = try? await URLSession.shared.data(for: req)
     }
 }
 
@@ -224,6 +265,38 @@ final class AccountStore: ObservableObject {
         UserDefaults.standard.removeObject(forKey: "jm.deletedFolders.v1")
     }
 
+    private var cloudTombstonesFetchedAt: Date?
+
+    private var registryKey: String? {
+        guard let user = username, let uid = Self.currentUserId else { return nil }
+        return FolderRegistry.accountKey(username: user, uid: uid)
+    }
+
+    /// Pull the cloud deleted-folder list and merge it into the
+    /// local tombstones (union — a deletion recorded on any device
+    /// applies everywhere). Failures are silent: the local list
+    /// alone is a complete fallback. Throttled to once per 10 min
+    /// so profile visits don't turn into KV read traffic.
+    func refreshCloudTombstones() async {
+        guard let key = registryKey else { return }
+        if let at = cloudTombstonesFetchedAt, Date().timeIntervalSince(at) < 600 { return }
+        cloudTombstonesFetchedAt = Date()
+        guard let ids = await FolderRegistry.fetchDeleted(key: key) else { return }
+        let now = Date().timeIntervalSince1970
+        var changed = false
+        for id in ids where deletedFolderTombstones[id] == nil {
+            deletedFolderTombstones[id] = now
+            changed = true
+        }
+        if changed {
+            saveTombstones()
+            cloudFolders.removeAll { deletedFolderTombstones[$0.id] != nil }
+            if deletedFolderTombstones[cloudFolderId] != nil {
+                cloudFolderId = "0"
+            }
+        }
+    }
+
     /// Folders as shown in pickers: the default folder always comes first.
     var displayFolders: [FavFolder] {
         if cloudFolders.contains(where: { $0.id == "0" }) { return cloudFolders }
@@ -306,6 +379,9 @@ final class AccountStore: ObservableObject {
         // the folder back — see noteFolders.
         deletedFolderTombstones[id] = Date().timeIntervalSince1970
         saveTombstones()
+        if let key = registryKey {
+            Task { await FolderRegistry.reportDeleted(key: key, folderId: id) }
+        }
         let backup = cloudFolders
         cloudFolders.removeAll { $0.id == id }
         folderItems[id] = nil; folderTotals[id] = nil; folderPages[id] = nil
@@ -407,6 +483,7 @@ final class AccountStore: ObservableObject {
             if let user = username { loadTombstones(for: user) }
             await hydrateCloudFromDisk()
         }
+        await refreshCloudTombstones()
         if cloudFavorites.isEmpty {
             await loadCloudPage()
         } else {
