@@ -135,7 +135,7 @@ final class AccountStore: ObservableObject {
            let st = try? JSONDecoder().decode(MemberStats.self, from: data) {
             stats = st
         }
-        if let user = username { loadTombstones(for: user) }
+        if let user = username { loadTombstones(for: user); loadRemovedFavs(for: user) }
     }
 
     private func saveStats() {
@@ -178,6 +178,7 @@ final class AccountStore: ObservableObject {
         Keychain.set("username", name)
         self.username = name
         loadTombstones(for: name)
+        loadRemovedFavs(for: name)
         var st = MemberStats()
         st.exp = anyInt(info["exp"])
         st.nextLevelExp = anyInt(info["nextLevelExp"])
@@ -270,6 +271,44 @@ final class AccountStore: ObservableObject {
         UserDefaults.standard.removeObject(forKey: "jm.deletedFolders.v1")
     }
 
+    // MARK: - removed-favorite tombstones
+    /// Albums the user unfavorited IN THIS APP. The favorites hosts
+    /// flip-flop for hours (the folder-tombstone lesson), so a merge or
+    /// reload can resurrect a just-removed album from a stale list —
+    /// and persist the resurrection (build 43 report 2026-11-05: star
+    /// turned off, album stayed in the list, back again after
+    /// relaunch). While a tombstone lives, list building skips the id.
+    /// Cleared when the album is favorited again in-app or the album
+    /// endpoint itself reports it favorited; expires after 7 days as
+    /// a cross-device safety valve.
+    private var removedFavTombstones: [String: TimeInterval] = [:]
+
+    private func removedFavKey(for user: String) -> String { "jm.removedFavs.v1.\(user)" }
+
+    private func loadRemovedFavs(for user: String) {
+        let saved = UserDefaults.standard.dictionary(forKey: removedFavKey(for: user)) as? [String: TimeInterval] ?? [:]
+        let cutoff = Date().timeIntervalSince1970 - 7 * 24 * 3600
+        removedFavTombstones = saved.filter { $0.value > cutoff }
+    }
+
+    private func saveRemovedFavs() {
+        guard let user = username else { return }
+        UserDefaults.standard.set(removedFavTombstones, forKey: removedFavKey(for: user))
+    }
+
+    private func isRemovedFav(_ id: String) -> Bool { removedFavTombstones[id] != nil }
+
+    /// The album is favorited again (here, or the server says so):
+    /// stop filtering it out of the lists.
+    func clearRemovedFav(_ id: String) {
+        if removedFavTombstones.removeValue(forKey: id) != nil { saveRemovedFavs() }
+    }
+
+    private func clearRemovedFavs(for user: String?) {
+        removedFavTombstones = [:]
+        if let user { UserDefaults.standard.removeObject(forKey: removedFavKey(for: user)) }
+    }
+
     private var cloudTombstonesFetchedAt: Date?
 
     private var registryKey: String? {
@@ -346,7 +385,7 @@ final class AccountStore: ObservableObject {
             folderTotals[fid] = res.total
             folderPages[fid] = page
             let known = Set(loaded.map(\.id))
-            folderItems[fid] = loaded + res.items.filter { !known.contains($0.id) }
+            folderItems[fid] = loaded + res.items.filter { !known.contains($0.id) && !isRemovedFav($0.id) }
         } catch { /* keep what we have */ }
     }
 
@@ -449,6 +488,8 @@ final class AccountStore: ObservableObject {
     /// After an unfavorite: drop the comic from every cached list and
     /// fix the totals (mirrors applyFolderMove's cache surgery).
     func applyCloudRemoval(aid: String) {
+        removedFavTombstones[aid] = Date().timeIntervalSince1970
+        saveRemovedFavs()
         if cloudFavorites.contains(where: { $0.id == aid }) {
             cloudFavorites.removeAll { $0.id == aid }
             cloudTotal = max(0, cloudTotal - 1)
@@ -464,13 +505,27 @@ final class AccountStore: ObservableObject {
     }
 
     private var persistScheduled = false
+    private var persistGen = 0
 
     /// Encoding a 1000+ item snapshot on the main thread was part of the
     /// profile-page hitch: encode detached, and coalesce bursts (paging
     /// calls this per page) into one write with the latest state.
     private func persistCloudSnapshot() {
-        guard let owner = cloudOwner, !persistScheduled else { return }
+        guard let owner = cloudOwner else { return }
+        persistGen += 1
+        if persistScheduled { return }
         persistScheduled = true
+        writeCloudSnapshot(owner: owner)
+    }
+
+    /// The writer re-checks the generation when it lands: if the list
+    /// changed while a write was in flight, the coalescing used to drop
+    /// the newer state entirely — a removal right after a page load
+    /// never reached disk and the album resurrected on relaunch. Now
+    /// the latest state is written again instead of just clearing the
+    /// flag.
+    private func writeCloudSnapshot(owner: String) {
+        let gen = persistGen
         let snap = CloudFavSnapshot(owner: owner, total: cloudTotal, pages: cloudPage,
                                     pageSize: cloudPageSize, items: cloudFavorites)
         let key = cloudKey
@@ -478,7 +533,14 @@ final class AccountStore: ObservableObject {
             if let data = try? JSONEncoder().encode(snap) {
                 UserDefaults.standard.set(data, forKey: key)
             }
-            await MainActor.run { [weak self] in self?.persistScheduled = false }
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                if self.persistGen != gen {
+                    self.writeCloudSnapshot(owner: owner)
+                } else {
+                    self.persistScheduled = false
+                }
+            }
         }
     }
 
@@ -488,7 +550,7 @@ final class AccountStore: ObservableObject {
             try? JSONDecoder().decode(CloudFavSnapshot.self, from: data)
         }.value
         guard let snap, snap.owner == username else { return }
-        cloudFavorites = snap.items
+        cloudFavorites = snap.items.filter { !isRemovedFav($0.id) }
         cloudTotal = snap.total
         cloudPage = snap.pages
         cloudPageSize = snap.pageSize
@@ -503,7 +565,7 @@ final class AccountStore: ObservableObject {
             cloudFavorites = []; cloudPage = 0; cloudTotal = 0; cloudPageSize = 0; cloudAllFetched = false
             cloudFolders = []; cloudFolderId = "0"
             folderItems = [:]; folderTotals = [:]; folderPages = [:]
-            if let user = username { loadTombstones(for: user) }
+            if let user = username { loadTombstones(for: user); loadRemovedFavs(for: user) }
             await hydrateCloudFromDisk()
         }
         await refreshCloudTombstones()
@@ -542,6 +604,7 @@ final class AccountStore: ObservableObject {
             }
             for item in pageItems {
                 if item.id == cloudFavorites.first?.id { overlapped = true; break }
+                if isRemovedFav(item.id) { continue }
                 fresh.append(item)
             }
             if overlapped { break }
@@ -576,7 +639,7 @@ final class AccountStore: ObservableObject {
             if cloudPageSize == 0 { cloudPageSize = res.items.count }
             cloudPage += 1
             let known = Set(cloudFavorites.map(\.id))
-            cloudFavorites += res.items.filter { !known.contains($0.id) }
+            cloudFavorites += res.items.filter { !known.contains($0.id) && !isRemovedFav($0.id) }
             persistCloudSnapshot()
         } catch { /* keep cache */ }
     }
@@ -642,7 +705,7 @@ final class AccountStore: ObservableObject {
         var merged = cloudFavorites
         var seen = Set(merged.map(\.id))
         for p in remaining {
-            for item in fetched[p] ?? [] where !seen.contains(item.id) {
+            for item in fetched[p] ?? [] where !seen.contains(item.id) && !isRemovedFav(item.id) {
                 seen.insert(item.id)
                 merged.append(item)
             }
@@ -664,6 +727,7 @@ final class AccountStore: ObservableObject {
         cloudFolders = []; cloudFolderId = "0"
         folderItems = [:]; folderTotals = [:]; folderPages = [:]
         clearTombstones(for: outgoing)
+        clearRemovedFavs(for: outgoing)
         UserDefaults.standard.removeObject(forKey: cloudKey)
         UserDefaults.standard.removeObject(forKey: statsKey)
     }

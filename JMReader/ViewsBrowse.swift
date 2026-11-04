@@ -1282,7 +1282,8 @@ struct DetailView: View {
                 // Server-side toggle; trust its report over local state.
                 let nowFav = try await JMClient.shared.toggleFavorite(albumId: comic.id)
                 cloudFav = nowFav
-                if !nowFav { account.applyCloudRemoval(aid: comic.id) }
+                if nowFav { account.clearRemovedFav(comic.id) }
+                else { account.applyCloudRemoval(aid: comic.id) }
             } catch { /* leave state */ }
         } else {
             library.toggleFavorite(comic)
@@ -1304,6 +1305,7 @@ struct DetailView: View {
                     nowFav = try await JMClient.shared.toggleFavorite(albumId: comic.id)
                 }
                 cloudFav = nowFav
+                if nowFav { account.clearRemovedFav(comic.id) }
                 if folderId != "0" {
                     try await JMClient.shared.favoriteFolderMove(albumId: comic.id, folderId: folderId)
                 }
@@ -1437,6 +1439,7 @@ struct DetailView: View {
             detail = d
             blockStore.remember(albumId: d.id, tags: d.tags, authors: d.authors)
             cloudFav = d.isFavorite
+            if d.isFavorite { account.clearRemovedFav(d.id) }
         } catch { loadFailed = true }
     }
 }
