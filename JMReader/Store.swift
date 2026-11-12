@@ -765,8 +765,16 @@ final class LibraryStore: ObservableObject {
     @Published private(set) var favorites: [Comic] = []
     /// albumId -> timeIntervalSince1970 when it was favorited (for sorting)
     @Published private(set) var favDates: [String: Double] = [:]
-    /// albumId -> (chapterId, pageIndex)
-    @Published private(set) var progress: [String: ProgressEntry] = [:]
+    /// albumId -> (chapterId, pageIndex). Deliberately NOT @Published: the
+    /// reader saves progress on every page turn, and publishing each save
+    /// re-rendered the detail view underneath mid-push, popping the reader
+    /// straight back (same failure as the tag/author caches). Saves are
+    /// silent; `noteProgressChanged()` is called when the reader closes
+    /// so surfaces showing progress refresh once, at a safe moment.
+    private(set) var progress: [String: ProgressEntry] = [:]
+    @Published private(set) var progressTick = 0
+
+    func noteProgressChanged() { progressTick &+= 1 }
 
     struct ProgressEntry: Codable {
         var chapterId: String
@@ -840,11 +848,13 @@ final class LibraryStore: ObservableObject {
     func removeProgress(albumId: String) {
         progress[albumId] = nil
         persistProgress()
+        noteProgressChanged()
     }
 
     func clearProgress() {
         progress = [:]
         persistProgress()
+        noteProgressChanged()
     }
 
     /// Fill in a missing album title (entries recorded before titles were stored).

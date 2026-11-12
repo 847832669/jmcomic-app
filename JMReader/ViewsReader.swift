@@ -77,7 +77,13 @@ struct ReaderView: View {
                 readingStats.addSeconds(10)
             }
         }
-        .onDisappear { preloadTask?.cancel() }
+        .onDisappear {
+            preloadTask?.cancel()
+            // Final progress save (per-page saves are silent now), then one
+            // refresh signal so the detail view's resume label is current.
+            saveProgress()
+            library.noteProgressChanged()
+        }
     }
 
     private var content: some View {
