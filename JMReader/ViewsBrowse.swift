@@ -2220,7 +2220,9 @@ struct AuthorWorksView: View {
     var body: some View {
         ScrollView {
             if !items.isEmpty {
-                ComicGrid(items: items, applyBlockFilter: true, directDetailLinks: true) { Task { await loadMore() } }
+                ComicGrid(items: items, applyBlockFilter: true,
+                          onLastAppear: { Task { await loadMore() } },
+                          directDetailLinks: true)
                     .padding(.top, 6)
             }
             if loading {
