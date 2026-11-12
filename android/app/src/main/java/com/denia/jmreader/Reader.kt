@@ -46,11 +46,9 @@ fun ReaderScreen(dest: ReaderDest, router: Router) {
         try {
             val ch = JmApi.chapter(dest.chapterId)
             chapter = ch
-            val imgs = ch.optJSONArray("images")
-            val count = imgs?.length() ?: 0
             ReadingStats.recordChapter(
                 albumId = dest.albumId.ifEmpty { dest.chapterId },
-                chapterId = dest.chapterId, pages = count)
+                chapterId = dest.chapterId)
             // Next-chapter preload (bounded, sequential — the iOS build-40
             // lesson): chapter data + the first 6 pages only, warmed into
             // ReaderCache one at a time instead of a parallel storm.
@@ -95,6 +93,11 @@ fun ReaderScreen(dest: ReaderDest, router: Router) {
         var rtl by remember { mutableStateOf(Settings.readerRtl) }
         var pageIdx by remember(dest.chapterId) { mutableIntStateOf(0) }
         val pageNow = if (mode == "page") (pageIdx + 1).coerceIn(1, maxOf(1, files.size)) else scrollPage
+        // Reading stats: count pages as they are actually reached (both
+        // modes funnel through pageNow), never the whole chapter at open.
+        LaunchedEffect(pageNow, dest.chapterId) {
+            ReadingStats.recordPage(dest.chapterId, pageNow - 1, files.size)
+        }
 
         Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = { router.pop() }) { Text("‹ 返回", color = Pink, fontSize = 15.sp) }

@@ -327,12 +327,16 @@ object BlockTags {
     }
 }
 
-/** Reading statistics (mirror of iOS v2.18): albums/chapters/pages/time,
- * counted locally from this version on. */
+/** Reading statistics (mirror of iOS v2.19): albums/chapters counted once,
+ * pages counted only as actually reached (per-episode furthest page),
+ * plus reading time. The v1 counting added a chapter's full page count the
+ * moment it was opened, so on first run of this version the page total
+ * restarts from 0 (albums/chapters/seconds carry over). */
 object ReadingStats {
     private var prefs: SharedPreferences? = null
     private var albums = mutableSetOf<String>()
     private var chapters = mutableSetOf<String>()
+    private var episodePages = mutableMapOf<String, Int>()
     var albumCount by mutableIntStateOf(0)
         private set
     var chapterCount by mutableIntStateOf(0)
@@ -354,32 +358,58 @@ object ReadingStats {
         }
         albums = loadSet("albums")
         chapters = loadSet("chapters")
-        pagesRead = p.getInt("pages", 0)
         secondsRead = p.getInt("seconds", 0)
+        if (p.getInt("ver", 1) >= 2) {
+            pagesRead = p.getInt("pages", 0)
+            val obj = try { JSONObject(p.getString("episodePages", "{}") ?: "{}") } catch (e: Exception) { JSONObject() }
+            val keys = obj.keys()
+            while (keys.hasNext()) {
+                val k = keys.next()
+                episodePages[k] = obj.optInt(k)
+            }
+        } else {
+            // v1 pages were whole-chapter counts; restart honestly.
+            pagesRead = 0
+            persist()
+        }
         albumCount = albums.size
         chapterCount = chapters.size
     }
 
     private fun persist() {
         val p = prefs ?: return
+        val ep = JSONObject()
+        for ((k, v) in episodePages) ep.put(k, v)
         p.edit()
             .putString("albums", JSONArray(albums.toList()).toString())
             .putString("chapters", JSONArray(chapters.toList()).toString())
             .putInt("pages", pagesRead)
             .putInt("seconds", secondsRead)
+            .putString("episodePages", ep.toString())
+            .putInt("ver", 2)
             .apply()
     }
 
-    /** First open of a chapter counts it (and its pages) once. */
-    fun recordChapter(albumId: String, chapterId: String, pages: Int) {
+    /** Chapter opened: counts the album/chapter once; pages are counted
+     * separately as they are reached (recordPage). */
+    fun recordChapter(albumId: String, chapterId: String) {
         var changed = false
         if (albums.add(albumId)) { albumCount = albums.size; changed = true }
-        if (chapters.add(chapterId)) {
-            chapterCount = chapters.size
-            pagesRead += pages
-            changed = true
-        }
+        if (chapters.add(chapterId)) { chapterCount = chapters.size; changed = true }
         if (changed) persist()
+    }
+
+    /** Only pages actually reached count, each at most once per episode:
+     * the total grows by how far past the previous furthest page this
+     * position is. */
+    fun recordPage(chapterId: String, pageIndex: Int, chapterPages: Int) {
+        if (chapterId.isEmpty() || chapterPages <= 0) return
+        val reached = (pageIndex + 1).coerceIn(0, chapterPages)
+        val prev = episodePages[chapterId] ?: 0
+        if (reached <= prev) return
+        episodePages[chapterId] = reached
+        pagesRead += reached - prev
+        persist()
     }
 
     fun addSeconds(sec: Int) {
