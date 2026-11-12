@@ -2189,6 +2189,7 @@ struct AuthorWorksView: View {
     let author: String
     @State private var items: [Comic] = []
     @State private var page = 0
+    @State private var fetched = 0
     @State private var total = 0
     @State private var loading = false
     @State private var done = false
@@ -2217,16 +2218,29 @@ struct AuthorWorksView: View {
         guard !loading, !done else { return }
         loading = true
         defer { loading = false }
-        let next = page + 1
-        guard let r = try? await JMClient.shared.search(query: author, page: next) else { done = true; return }
-        total = r.total
-        // search matches broadly; keep only works actually credited to this author
-        let credited = r.items.filter { $0.author.contains(author) }
-        for c in credited where !items.contains(where: { $0.id == c.id }) {
-            items.append(c)
+        // Keep paging until this call turns up at least one credited work (or
+        // the results run out). The old code stopped after a single page, so
+        // when that page's broad matches were all filtered out the view was
+        // left blank with no grid to trigger another load. mainTag 2 asks the
+        // API for author matches specifically instead of searching everything.
+        var added = 0
+        var hops = 0
+        while !done && added == 0 && hops < 10 {
+            hops += 1
+            let next = page + 1
+            guard let r = try? await JMClient.shared.search(query: author, page: next, mainTag: 2)
+            else { done = true; break }
+            total = r.total
+            page = next
+            fetched += r.items.count
+            // search can still stray; keep only works actually credited to this author
+            let credited = r.items.filter { $0.author.contains(author) }
+            for c in credited where !items.contains(where: { $0.id == c.id }) {
+                items.append(c)
+                added += 1
+            }
+            if r.items.isEmpty || fetched >= total { done = true }
         }
-        page = next
-        if r.items.isEmpty || items.count >= total { done = true }
     }
 }
 

@@ -57,6 +57,11 @@ struct ReaderView: View {
         .onChange(of: readerMode) { _ in
             if paged { displayIndex = displayIndex(forLogical: currentPage) }
         }
+        .onChange(of: currentPage) { newPage in
+            // Reading stats: count pages as they are actually reached, in
+            // both scroll and paged modes (both funnel through currentPage).
+            readingStats.recordPage(episodeId: chapterId, pageIndex: newPage, chapterPages: pages.count)
+        }
                         .task {
             if !didInit {
                 didInit = true
@@ -263,7 +268,8 @@ struct ReaderView: View {
         displayIndex = displayIndex(forLogical: 0)
         loading = false
         loadFailed = false
-        readingStats.recordChapter(albumId: route.albumId, episodeId: id, pages: ch.images.count)
+        readingStats.recordChapter(albumId: route.albumId, episodeId: id)
+        readingStats.recordPage(episodeId: id, pageIndex: page, chapterPages: ch.images.count)
         if page > 0 && page < ch.images.count {
             // give layout a beat, then jump
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {

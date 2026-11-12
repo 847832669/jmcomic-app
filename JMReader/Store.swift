@@ -1065,7 +1065,8 @@ final class BlockTagStore: ObservableObject {
 // MARK: - reading stats
 
 /// Local reading statistics: distinct albums/episodes opened in the reader,
-/// total pages across first-opened episodes, and time spent with the reader
+/// pages actually reached (per-episode furthest page, so opening a chapter
+/// no longer counts its whole page count), and time spent with the reader
 /// open. Counted from v2.18 on; nothing is backfilled from earlier reading.
 @MainActor
 final class ReadingStatsStore: ObservableObject {
@@ -1079,14 +1080,24 @@ final class ReadingStatsStore: ObservableObject {
         var chapters: [String] = []
         var pages: Int = 0
         var seconds: Int = 0
+        var episodePages: [String: Int] = [:]
     }
     private var snap = Snapshot()
-    private let key = "jm.readStats.v1"
+    private let key = "jm.readStats.v2"
+    private let legacyKey = "jm.readStats.v1"
 
     init() {
         if let data = UserDefaults.standard.data(forKey: key),
            let s = try? JSONDecoder().decode(Snapshot.self, from: data) {
             snap = s
+        } else if let data = UserDefaults.standard.data(forKey: legacyKey),
+                  let s = try? JSONDecoder().decode(Snapshot.self, from: data) {
+            // v1 added a chapter's full page count the moment it was opened,
+            // so its page total is inflated and cannot be decomposed; carry
+            // over the album/chapter/time counts and restart pages honestly.
+            snap.albums = s.albums
+            snap.chapters = s.chapters
+            snap.seconds = s.seconds
         }
         publish()
     }
@@ -1105,9 +1116,9 @@ final class ReadingStatsStore: ObservableObject {
         publish()
     }
 
-    /// Called when a chapter opens in the reader. Each episode counts once;
-    /// its pages are added the first time it is opened.
-    func recordChapter(albumId: String, episodeId: String, pages: Int) {
+    /// Called when a chapter opens in the reader. Each album and episode
+    /// counts once; pages are counted separately as they are reached.
+    func recordChapter(albumId: String, episodeId: String) {
         var changed = false
         if !snap.albums.contains(albumId) {
             snap.albums.append(albumId)
@@ -1115,10 +1126,22 @@ final class ReadingStatsStore: ObservableObject {
         }
         if !snap.chapters.contains(episodeId) {
             snap.chapters.append(episodeId)
-            snap.pages += pages
             changed = true
         }
         if changed { persist() }
+    }
+
+    /// Called as the reader moves through a chapter. Only pages actually
+    /// reached count, each at most once per episode: the total grows by how
+    /// far past the previous furthest page this position is.
+    func recordPage(episodeId: String, pageIndex: Int, chapterPages: Int) {
+        guard !episodeId.isEmpty, chapterPages > 0 else { return }
+        let reached = min(max(pageIndex + 1, 0), chapterPages)
+        let prev = snap.episodePages[episodeId] ?? 0
+        guard reached > prev else { return }
+        snap.episodePages[episodeId] = reached
+        snap.pages += reached - prev
+        persist()
     }
 
     func addSeconds(_ s: Int) {
