@@ -899,9 +899,17 @@ final class SearchHistory: ObservableObject {
 @MainActor
 final class BlockTagStore: ObservableObject {
     @Published private(set) var blockedTags: [String] = []
-    @Published private(set) var tagCache: [String: [String]] = [:]
+    // Tags/authors learned from album fetches. Deliberately NOT @Published:
+    // a detail view records its album here the moment it finishes loading,
+    // and publishing on every learn re-rendered the grid underneath while
+    // the push transition was still settling — on iOS 27 that tore down the
+    // tapped cell's link and popped the just-opened detail straight back.
+    // The author page hit it every time because its albums are never in
+    // the cache yet. Filtering reads the caches on the next natural
+    // render; only the blocked lists themselves stay published.
+    private(set) var tagCache: [String: [String]] = [:]
     @Published private(set) var blockedAuthors: [String] = []
-    @Published private(set) var authorCache: [String: [String]] = [:]
+    private(set) var authorCache: [String: [String]] = [:]
     private var inFlight: Set<String> = []
     private var persistTask: Task<Void, Never>?
 
@@ -965,9 +973,8 @@ final class BlockTagStore: ObservableObject {
             if tagCache[id] != tags { tagCache[id] = tags; changed = true }
             if authorCache[id] != authors { authorCache[id] = authors; changed = true }
         }
-        // tagCache/authorCache are two separate @Published properties, so a
-        // batch still publishes once per property — unavoidable here, but
-        // far better than the old per-album full re-encode + write below.
+        // The caches are not @Published (see their declaration), so merging
+        // here triggers no view updates at all.
         return changed
     }
 
