@@ -1,11 +1,12 @@
 import SwiftUI
 
-struct ReaderRoute: Hashable {
+struct ReaderRoute: Hashable, Identifiable {
     var albumId: String
     var albumName: String
     var chapters: [ChapterRef]
     var startChapterId: String
     var startPage: Int
+    var id: String { albumId + "|" + startChapterId + "|" + String(startPage) }
 }
 
 struct ReaderView: View {

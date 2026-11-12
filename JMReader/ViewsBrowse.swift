@@ -151,7 +151,6 @@ extension View {
     func withDestinations() -> some View {
         self
             .navigationDestination(for: String.self) { DetailView(albumId: $0) }
-            .navigationDestination(for: ReaderRoute.self) { ReaderView(route: $0) }
             .navigationDestination(for: JMCategory.self) { CategoryListView(category: $0) }
     }
 }
@@ -1195,6 +1194,11 @@ struct DetailView: View {
     @State private var cloudFav: Bool = false
     @State private var favBusy = false
     @State private var tagsExpanded = false
+    /// The reader is presented as a full-screen cover, NOT pushed onto the
+    /// navigation stack: on iOS 27.3 pushing it from a deep stack left the
+    /// stack's visual order one step behind (the reader ran underneath the
+    /// detail/author views and only surfaced after they were popped).
+    @State private var readerRoute: ReaderRoute?
 
     private var asComic: Comic? {
         guard let d = detail else { return nil }
@@ -1281,6 +1285,9 @@ struct DetailView: View {
             }
         }
         .swipeAnywhereBack { dismiss() }
+        .fullScreenCover(item: $readerRoute) { route in
+            ReaderView(route: route)
+        }
         .task { if detail == nil { await load() } }
             }
 
@@ -1384,12 +1391,13 @@ struct DetailView: View {
         let targetPage = (prog != nil && prog!.chapterId == targetChapter) ? prog!.page : 0
         let route = ReaderRoute(albumId: d.id, albumName: d.name, chapters: d.chapters,
                                 startChapterId: targetChapter, startPage: targetPage)
-        return NavigationLink(value: route) {
+        return Button { readerRoute = route } label: {
             Text(prog == nil ? "开始阅读" : "继续阅读 · \(prog!.chapterName) 第\(prog!.page + 1)页")
                 .font(.headline).foregroundColor(.white)
                 .frame(maxWidth: .infinity).padding(.vertical, 13)
                 .background(accentPink).cornerRadius(12)
         }
+        .buttonStyle(.plain)
         .padding(.horizontal, 16).padding(.top, 16)
     }
 
@@ -1422,9 +1430,11 @@ struct DetailView: View {
                 .padding(.horizontal, 16).padding(.top, 18).padding(.bottom, 4)
             ForEach(d.chapters) { ch in
                 let prog = library.progressFor(albumId: d.id)
-                NavigationLink(value: ReaderRoute(albumId: d.id, albumName: d.name, chapters: d.chapters,
-                                                  startChapterId: ch.id,
-                                                  startPage: prog?.chapterId == ch.id ? prog!.page : 0)) {
+                Button {
+                    readerRoute = ReaderRoute(albumId: d.id, albumName: d.name, chapters: d.chapters,
+                                              startChapterId: ch.id,
+                                              startPage: prog?.chapterId == ch.id ? prog!.page : 0)
+                } label: {
                     HStack {
                         Text(ch.name).font(.body)
                             .foregroundColor(prog?.chapterId == ch.id ? accentPink : .primary)
@@ -2278,6 +2288,7 @@ struct AuthorWorksView: View {
 struct HistoryView: View {
     @EnvironmentObject var library: LibraryStore
     @State private var showClearConfirm = false
+    @State private var readerRoute: ReaderRoute?
 
     private struct Row: Identifiable {
         let albumId: String
@@ -2300,13 +2311,15 @@ struct HistoryView: View {
     var body: some View {
         List {
             ForEach(entries) { item in
-                NavigationLink(value: ReaderRoute(
-                    albumId: item.albumId,
-                    albumName: item.entry.albumName ?? "",
-                    chapters: [],
-                    startChapterId: item.entry.chapterId,
-                    startPage: item.entry.page
-                )) {
+                Button {
+                    readerRoute = ReaderRoute(
+                        albumId: item.albumId,
+                        albumName: item.entry.albumName ?? "",
+                        chapters: [],
+                        startChapterId: item.entry.chapterId,
+                        startPage: item.entry.page
+                    )
+                } label: {
                     HStack(spacing: 12) {
                         RemoteImage(path: ImagePipe.coverPath(albumId: item.albumId), targetWidth: 200)
                             .frame(width: 46, height: 61)
@@ -2325,6 +2338,7 @@ struct HistoryView: View {
                     }
                     .padding(.vertical, 2)
                 }
+                .buttonStyle(.plain)
                 .swipeActions(edge: .trailing) {
                     Button(role: .destructive) {
                         library.removeProgress(albumId: item.albumId)
@@ -2336,6 +2350,9 @@ struct HistoryView: View {
         }
         .navigationTitle("观看历史")
         .navigationBarTitleDisplayMode(.inline)
+        .fullScreenCover(item: $readerRoute) { route in
+            ReaderView(route: route)
+        }
         .toolbar {
             if !entries.isEmpty {
                 ToolbarItem(placement: .topBarTrailing) {
