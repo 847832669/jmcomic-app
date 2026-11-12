@@ -657,22 +657,11 @@ struct SearchView: View {
         if !items.isEmpty && items.count >= total && total > 0 { return }
         loading = true
         defer { loading = false }
-        // Requests are issued with a sequence number: onLastAppear fires for
-        // every cell that appears, so a fast scroll queued several loadMore
-        // calls that all passed `!loading` once the first one finished, and
-        // the same page was appended two or three times — duplicate ids in
-        // the ForEach ("ID occurs multiple times") and jittering cells.
-        let requestPage = page + 1
-        let token = query + "|" + searchMaintagKey
         do {
-            let res = try await JMClient.shared.search(query: query, page: requestPage,
+            let res = try await JMClient.shared.search(query: query, page: page + 1,
                                                        order: searchOrder, mainTag: searchMainTag)
-            // Drop the result if the user retyped the query meanwhile.
-            guard token == query + "|" + searchMaintagKey, requestPage == page + 1 else { return }
-            // The second of two overlapping calls sees `page` already
-            // advanced by the first and drops its duplicate result.
             total = res.total
-            page = requestPage
+            page += 1
             if page == 1, let aid = res.redirectAid,
                let detail = try? await JMClient.shared.album(id: aid) {
                 // JM id ("车牌号") search: the API points straight at one album.
@@ -681,12 +670,9 @@ struct SearchView: View {
                 total = 1
                 return
             }
-            let known = Set(items.map(\.id))
-            items += res.items.filter { !known.contains($0.id) }
+            items += res.items
         } catch { /* keep what we have */ }
     }
-
-    private var searchMaintagKey: String { String(searchMainTag) }
 
     private func chipRow<V: Hashable>(label: String, options: [(V, String)],
                                       selection: Binding<V>) -> some View {
@@ -1479,14 +1465,8 @@ struct DetailView: View {
                     try await Task.sleep(nanoseconds: 20_000_000_000)
                     throw JMError.badResponse
                 }
-                // `try await group.next()!` force-unwrapped inside a
-                // *throwing* group: when the first child to finish was the
-                // timer (or the request threw), next() returned nil and the
-                // `!` crashed the app instead of showing the retry button —
-                // exactly the "20 s spin then crash" case this code was
-                // added to prevent.
-                defer { group.cancelAll() }
-                guard let first = try await group.next() else { throw JMError.badResponse }
+                let first = try await group.next()!
+                group.cancelAll()
                 return first
             }
             detail = d
@@ -2080,21 +2060,9 @@ enum AutoCheckIn {
     private static var todayKey: String {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
-        f.calendar = Calendar(identifier: .gregorian)
-        f.timeZone = TimeZone(identifier: "Asia/Shanghai") ?? .current
         f.dateFormat = "yyyy-MM-dd"
         return f.string(from: Date())
     }
-
-    /// Attempts per day. A single attempt on cold launch meant that one
-    /// failure (on the subway, on a dead line) forfeited the whole day's
-    /// streak — the runner is only called on launch and login changes, so
-    /// nothing tried again until tomorrow.
-    private static let maxAttemptsPerDay = 4
-    private static let retryGap: TimeInterval = 10 * 60
-
-    private static var attemptsKey: String { "autoCheckin.attempts." + todayKey }
-    private static var lastTryKey: String { "autoCheckin.lastTry." + todayKey }
 
     static var todayNotice: String? {
         let d = UserDefaults.standard
@@ -2102,28 +2070,15 @@ enum AutoCheckIn {
         return d.string(forKey: "autoCheckin.notice")
     }
 
-    /// True while today's check-in is still worth attempting (used by the
-    /// profile page to retry opportunistically when the user opens it).
-    static func needsRetry() -> Bool {
-        let d = UserDefaults.standard
-        guard d.string(forKey: "autoCheckin.day") != todayKey else { return false }
-        guard d.integer(forKey: attemptsKey) < maxAttemptsPerDay else { return false }
-        let last = d.double(forKey: lastTryKey)
-        return last == 0 || Date().timeIntervalSince1970 - last >= retryGap
-    }
-
     /// Runs once per day on launch / login change: if today's check-in is
     /// still open, sign it and remember the reward for the profile card.
-    /// A failed attempt leaves the day unset so a later call retries.
+    /// A failed attempt leaves the day unset so the next launch retries.
     @MainActor
     static func runIfNeeded(account: AccountStore) async {
         let d = UserDefaults.standard
         let enabled = d.object(forKey: "settings.autoCheckIn") as? Bool ?? true
         guard enabled, account.isLoggedIn, let uid = AccountStore.currentUserId else { return }
         guard d.string(forKey: "autoCheckin.day") != todayKey else { return }
-        guard needsRetry() else { return }
-        d.set(d.integer(forKey: attemptsKey) + 1, forKey: attemptsKey)
-        d.set(Date().timeIntervalSince1970, forKey: lastTryKey)
         guard let info = try? await JMClient.shared.dailyInfo(userId: uid) else { return }
         if info.todaySigned {
             d.set(todayKey, forKey: "autoCheckin.day")
@@ -2136,7 +2091,7 @@ enum AutoCheckIn {
             d.set("今日已自动签到\(reward.isEmpty ? "" : "：\(reward)")", forKey: "autoCheckin.notice")
             d.set(todayKey, forKey: "autoCheckin.noticeDay")
         } catch {
-            // leave the day unset; the next trigger retries (bounded above)
+            // leave the day unset; next launch retries
         }
     }
 }
@@ -2210,7 +2165,7 @@ struct CheckinCard: View {
     private func calendar(_ info: DailyInfo) -> some View {
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 5), count: 7), spacing: 5) {
             ForEach(info.weeks.flatMap { $0 }) { day in
-                dayCell(day, today: String(Int(day.date) ?? -1) == info.todayString)
+                dayCell(day, today: day.date == info.todayString)
             }
         }
     }
@@ -2246,10 +2201,6 @@ struct CheckinCard: View {
         guard account.isLoggedIn, let uid = AccountStore.currentUserId else { return }
         loading = true
         defer { loading = false }
-        // Opportunistic retry: the launch-time attempt may have failed
-        // (offline, dead line) and nothing else would try again until the
-        // next cold start. Bounded inside runIfNeeded.
-        if AutoCheckIn.needsRetry() { await AutoCheckIn.runIfNeeded(account: account) }
         info = try? await JMClient.shared.dailyInfo(userId: uid)
     }
 

@@ -16,14 +16,9 @@ enum PdfWriter {
         UIGraphicsBeginPDFContextToFile(url.path, CGRect(origin: .zero, size: firstImg.size), nil)
         defer { UIGraphicsEndPDFContext() }
         for e in entries {
-            // One autorelease pool per page: without it every decoded page
-            // (~12 MB RGBA for a 2000×3000 scan) lived until the whole album
-            // finished, which jetsammed the app on long albums.
-            autoreleasepool {
-                guard let img = UIImage(contentsOfFile: e.file.path) else { return }
-                UIGraphicsBeginPDFPageWithInfo(CGRect(origin: .zero, size: img.size), nil)
-                img.draw(in: CGRect(origin: .zero, size: img.size))
-            }
+            guard let img = UIImage(contentsOfFile: e.file.path) else { continue }
+            UIGraphicsBeginPDFPageWithInfo(CGRect(origin: .zero, size: img.size), nil)
+            img.draw(in: CGRect(origin: .zero, size: img.size))
         }
     }
 }
@@ -174,14 +169,7 @@ final class DownloadManager: ObservableObject {
 
     private func run(_ job: DownloadJob) async {
         let fm = FileManager.default
-        // Keyed by album only (not by job UUID): a new job for the same
-        // album reuses the page folder left by the failed attempt, which is
-        // what makes "retry" resume instead of starting over.
-        let tmp = fm.temporaryDirectory.appendingPathComponent("jm-dl-\(job.albumId)")
-        // Pages are written as plain JPEG files under this folder (not held
-        // as [(URL)] in memory) and the folder is kept on failure, so
-        // "retry" resumes instead of re-downloading the whole album.
-        let pagesDir = tmp.appendingPathComponent("pages", isDirectory: true)
+        let tmp = fm.temporaryDirectory.appendingPathComponent("jm-dl-\(job.albumId)-\(job.id.uuidString)")
         job.state = .working
         job.phase = "获取章节列表…"
         do {
@@ -189,59 +177,24 @@ final class DownloadManager: ObservableObject {
             let chapters: [ChapterRef] = album.chapters.isEmpty
                 ? [ChapterRef(id: album.id, name: album.name, sort: 1)]
                 : album.chapters
-            try fm.createDirectory(at: pagesDir, withIntermediateDirectories: true)
-            defer {
-                // Completed or cancelled: drop the scratch folder. Failed:
-                // keep it for the retry (the storage page reports its size).
-                if job.state == .done || job.state == .cancelled {
-                    try? fm.removeItem(at: tmp)
-                }
-            }
-
-            // Chapter lists are fetched in windows of 4 instead of one at a
-            // time: a 40-chapter album spent 40 sequential round trips
-            // (each up to 12 s on a bad line) before the first image moved.
             var plan: [(chapter: ChapterRef, images: [String])] = []
-            var totalPages = 0
-            for window in stride(from: 0, to: chapters.count, by: 4) {
+            for ch in chapters {
                 if Task.isCancelled { throw CancellationError() }
-                let slice = Array(chapters[window..<min(window + 4, chapters.count)])
-                let results = await withTaskGroup(of: (Int, [String]?).self) { group in
-                    for (off, ch) in slice.enumerated() {
-                        group.addTask {
-                            let cd = try? await JMClient.shared.chapter(id: ch.id)
-                            return (window + off, cd?.images)
-                        }
-                    }
-                    var out: [(Int, [String]?)] = []
-                    for await r in group { out.append(r) }
-                    return out.sorted { $0.0 < $1.0 }
-                }
-                for (i, images) in results {
-                    // A chapter whose page list fails must not abort the
-                    // whole album: keep the rest and report at the end.
-                    plan.append((chapters[i], images ?? []))
-                    totalPages += images?.count ?? 0
-                }
+                let cd = try await JMClient.shared.chapter(id: ch.id)
+                plan.append((ch, cd.images))
             }
-            job.totalPages = max(totalPages, 1)
-            guard totalPages > 0 else {
+            job.totalPages = plan.reduce(0) { $0 + $1.images.count }
+            guard job.totalPages > 0 else {
                 job.state = .failed
                 job.phase = "没有可下载的页面"
                 return
             }
+            try? fm.removeItem(at: tmp)
+            try fm.createDirectory(at: tmp, withIntermediateDirectories: true)
+            defer { try? fm.removeItem(at: tmp) }
 
-            // Resume: count what a previous attempt already wrote.
-            let existing = (try? fm.contentsOfDirectory(at: pagesDir, includingPropertiesForKeys: [.fileSizeKey])) ?? []
-            var existingBytes: Int64 = 0
-            for url in existing {
-                existingBytes += Int64((try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
-            }
-            job.donePages = existing.count
-            job.bytes = existingBytes
-            if existingBytes > 0 { job.phase = "继续上次下载…" }
-
-            var samples: [(Date, Int64)] = [(Date(), job.bytes)]
+            var entries: [(name: String, file: URL)] = []
+            var samples: [(Date, Int64)] = [(Date(), 0)]
             let multi = plan.count > 1
 
             for (ci, item) in plan.enumerated() {
@@ -253,39 +206,33 @@ final class DownloadManager: ObservableObject {
                     let batch = Array(files[idx..<min(idx + 3, files.count)])
                     let base = idx
                     let chapId = item.chapter.id
-                    let results: [(Int, Int64?)] = await withTaskGroup(of: (Int, Int64?).self) { group in
+                    let results: [(Int, URL?)] = await withTaskGroup(of: (Int, URL?).self) { group in
                         for (off, file) in batch.enumerated() {
                             let pageIndex = base + off
                             group.addTask {
-                                let dest = pagesDir.appendingPathComponent("\(ci)-\(pageIndex).jpg")
-                                if let size = (try? dest.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size > 0 {
-                                    return (pageIndex, Int64(size))   // already fetched
-                                }
-                                // Download at a capped width and encode at
-                                // quality 88: the old path decoded every page
-                                // at full resolution and re-encoded at 0.97,
-                                // so a download of N pages held N full-size
-                                // RGBA buffers and produced PDFs larger than
-                                // the originals.
                                 let stem = (file as NSString).deletingPathExtension
                                 let num = ImagePipe.splitNum(chapterId: chapId, stem: stem)
-                                guard let data = await ImagePipe.shared.pageJPEG(
+                                guard let data = await ImagePipe.shared.loadJPEG(
                                     path: ImagePipe.pagePath(chapterId: chapId, file: file),
                                     scrambleNum: num) else { return (pageIndex, nil) }
-                                do {
-                                    try data.write(to: dest, options: .atomic)
-                                    return (pageIndex, Int64(data.count))
-                                } catch { return (pageIndex, nil) }
+                                let dest = tmp.appendingPathComponent("\(ci)-\(pageIndex).jpg")
+                                do { try data.write(to: dest); return (pageIndex, dest) }
+                                catch { return (pageIndex, nil) }
                             }
                         }
-                        var collected: [(Int, Int64?)] = []
+                        var collected: [(Int, URL?)] = []
                         for await r in group { collected.append(r) }
                         return collected
                     }
-                    for (pageIndex, size) in results.sorted(by: { $0.0 < $1.0 }) {
+                    for (pageIndex, fileURL) in results.sorted(by: { $0.0 < $1.0 }) {
                         job.donePages += 1
-                        if let size {
+                        if let fileURL {
+                            let size = (try? fm.attributesOfItem(atPath: fileURL.path)[.size] as? Int64) ?? 0
                             job.bytes += size
+                            let name = multi
+                                ? String(format: "%03d-%@/%05d.jpg", ci + 1, Self.sanitize(item.chapter.name), pageIndex + 1)
+                                : String(format: "%05d.jpg", pageIndex + 1)
+                            entries.append((name, fileURL))
                         }
                         let now = Date()
                         samples.append((now, job.bytes))
@@ -302,33 +249,10 @@ final class DownloadManager: ObservableObject {
             if Task.isCancelled { throw CancellationError() }
             job.phase = "打包中…"
             job.speedBps = 0
-            // Assemble the page list from the files actually on disk.
-            var entries: [(name: String, file: URL)] = []
-            for (ci, item) in plan.enumerated() {
-                for (pi, _) in item.images.enumerated() {
-                    let url = pagesDir.appendingPathComponent("\(ci)-\(pi).jpg")
-                    guard fm.fileExists(atPath: url.path) else { continue }
-                    let name = multi
-                        ? String(format: "%03d-%@/%05d.jpg", ci + 1, Self.sanitize(item.chapter.name), pi + 1)
-                        : String(format: "%05d.jpg", pi + 1)
-                    entries.append((name, url))
-                }
-            }
-            guard !entries.isEmpty else {
-                job.state = .failed
-                job.phase = "下载失败，检查网络后重试"
-                return
-            }
             let fileName = "\(job.albumId) - \(Self.sanitize(job.title)).pdf"
             let dest = DownloadedStore.documents.appendingPathComponent(fileName)
-            let partial = DownloadedStore.documents.appendingPathComponent(fileName + ".part")
-            try? fm.removeItem(at: partial)
-            // Build next to the destination and move when complete, so a
-            // crash mid-write never leaves a truncated PDF that the library
-            // treats as a finished download.
-            try PdfWriter.write(entries: entries, to: partial)
             try? fm.removeItem(at: dest)
-            try fm.moveItem(at: partial, to: dest)
+            try PdfWriter.write(entries: entries, to: dest)
             let totalBytes = (try? fm.attributesOfItem(atPath: dest.path)[.size] as? Int64) ?? 0
             store.add(DownloadedRecord(albumId: job.albumId, title: job.title,
                                         chapters: plan.count, pages: entries.count,
@@ -338,11 +262,11 @@ final class DownloadManager: ObservableObject {
             job.phase = "完成"
         } catch is CancellationError {
             job.state = .cancelled
-            job.phase = "已取消（可继续下载）"
+            job.phase = "已取消"
         } catch {
             if Task.isCancelled {
                 job.state = .cancelled
-                job.phase = "已取消（可继续下载）"
+                job.phase = "已取消"
             } else {
                 job.state = .failed
                 job.phase = "下载失败，检查网络后重试"
