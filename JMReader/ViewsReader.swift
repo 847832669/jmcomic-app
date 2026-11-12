@@ -83,6 +83,9 @@ struct ReaderView: View {
             // refresh signal so the detail view's resume label is current.
             saveProgress()
             library.noteProgressChanged()
+            // Stats were recorded silently while reading; publish them now
+            // that the reader is gone (publishing mid-push popped it back).
+            readingStats.flushPublishes()
         }
     }
 

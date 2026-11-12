@@ -1130,8 +1130,16 @@ final class ReadingStatsStore: ObservableObject {
         if let data = try? JSONEncoder().encode(snap) {
             UserDefaults.standard.set(data, forKey: key)
         }
-        publish()
+        // Deliberately no publish() here: recording happens from inside the
+        // reader (chapter open, every page reached, every 10 s), and
+        // publishing re-rendered the reader while its push was still
+        // settling — on iOS 27 the just-opened reader popped straight back
+        // to the detail view. Recording is silent; display surfaces call
+        // flushPublishes() at safe moments (reader exit, stats card appear).
     }
+
+    /// Copy the silently-recorded totals into the @Published display values.
+    func flushPublishes() { publish() }
 
     /// Called when a chapter opens in the reader. Each album and episode
     /// counts once; pages are counted separately as they are reached.

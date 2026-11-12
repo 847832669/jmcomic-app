@@ -1614,6 +1614,10 @@ struct ReadingStatsCard: View {
         .glassSurface(RoundedRectangle(cornerRadius: 20, style: .continuous))
         .padding(.horizontal, 16)
         .padding(.top, 14)
+        // Totals are recorded silently while reading (publishing mid-push
+        // popped the reader); refresh the display values when this card
+        // appears.
+        .onAppear { stats.flushPublishes() }
     }
 
     private var durationText: String {
