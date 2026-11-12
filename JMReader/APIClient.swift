@@ -26,6 +26,7 @@ final class JMClient {
     private init() {
         let cfg = URLSessionConfiguration.default
         cfg.timeoutIntervalForRequest = 25
+        cfg.timeoutIntervalForResource = 30
         cfg.waitsForConnectivity = true
         session = URLSession(configuration: cfg)
     }

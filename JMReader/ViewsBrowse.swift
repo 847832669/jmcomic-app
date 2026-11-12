@@ -81,6 +81,11 @@ struct ComicGrid: View {
     var selecting: Bool = false
     var selectedIds: Set<String> = []
     var onToggleSelect: ((Comic) -> Void)? = nil
+    /// Open details through direct-destination links instead of value
+    /// routing. Used by the author page, whose grid sits one level deeper
+    /// (inside a directly-pushed view carrying its own destination
+    /// registrations); value routing misbehaved there on device.
+    var directDetailLinks = false
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var blockStore: BlockTagStore
 
@@ -94,6 +99,12 @@ struct ComicGrid: View {
                     Button { onToggleSelect?(comic) } label: {
                         ComicCell(comic: comic, columns: cols,
                                   selecting: true, selected: selectedIds.contains(comic.id))
+                    }
+                    .buttonStyle(.plain)
+                    .onAppear { if comic.id == shown.last?.id { onLastAppear?() } }
+                } else if directDetailLinks {
+                    NavigationLink { DetailView(albumId: comic.id) } label: {
+                        ComicCell(comic: comic, columns: cols)
                     }
                     .buttonStyle(.plain)
                     .onAppear { if comic.id == shown.last?.id { onLastAppear?() } }
@@ -1435,7 +1446,19 @@ struct DetailView: View {
     private func load() async {
         loadFailed = false
         do {
-            let d = try await JMClient.shared.album(id: albumId)
+            // Overall cap: if the album call has not answered in 20 s (a dead
+            // or stalled line can otherwise spin on the loading view for
+            // minutes), surface the failure state with its retry button.
+            let d = try await withThrowingTaskGroup(of: AlbumDetail.self) { group in
+                group.addTask { try await JMClient.shared.album(id: albumId) }
+                group.addTask {
+                    try await Task.sleep(nanoseconds: 20_000_000_000)
+                    throw JMError.badResponse
+                }
+                let first = try await group.next()!
+                group.cancelAll()
+                return first
+            }
             detail = d
             blockStore.remember(albumId: d.id, tags: d.tags, authors: d.authors)
             cloudFav = d.isFavorite
@@ -2197,7 +2220,7 @@ struct AuthorWorksView: View {
     var body: some View {
         ScrollView {
             if !items.isEmpty {
-                ComicGrid(items: items, applyBlockFilter: true) { Task { await loadMore() } }
+                ComicGrid(items: items, applyBlockFilter: true, directDetailLinks: true) { Task { await loadMore() } }
                     .padding(.top, 6)
             }
             if loading {
