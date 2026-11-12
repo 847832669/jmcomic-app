@@ -100,13 +100,17 @@ struct ReaderView: View {
                 }
             }
             .onChange(of: jumpTarget) { target in
-                if let target {
-                    if paged {
-                        displayIndex = displayIndex(forLogical: target)
-                    } else {
-                        withAnimation { proxy.scrollTo(target, anchor: .top) }
-                    }
-                    jumpTarget = nil
+                // Clamp before scrolling: on a single-page chapter the old
+                // slider reported 1, scrollTo(1) matched no id, and the
+                // gesture silently did nothing while still clearing the
+                // target.
+                defer { jumpTarget = nil }
+                guard let raw = target else { return }
+                let page = clampPage(raw)
+                if paged {
+                    displayIndex = displayIndex(forLogical: page)
+                } else if pages.indices.contains(page) {
+                    withAnimation { proxy.scrollTo(page, anchor: .top) }
                 }
             }
         }
@@ -234,7 +238,7 @@ struct ReaderView: View {
                         .font(.footnote).foregroundColor(accentPink)
                         .fixedSize()
                     Slider(value: $sliderValue, in: 0...Double(max(pages.count - 1, 1)), step: 1) { editing in
-                        if !editing { jumpTarget = Int(sliderValue) }
+                        if !editing { jumpTarget = clampPage(Int(sliderValue)) }
                     }
                     .tint(accentPink)
                 }
@@ -332,13 +336,25 @@ struct ReaderView: View {
     }
 
     private func prefetch(after idx: Int) {
-        for j in (idx + 1)...(idx + 3) {
-            guard pages.indices.contains(j) else { return }
+        guard !pages.isEmpty else { return }
+        // Clamped range, not `(idx + 1)...(idx + 3)`: that unconditionally
+        // built a valid range but the guard inside returned on the FIRST
+        // out-of-bounds index, which is correct yet easy to break when the
+        // page list shrinks between chapters.
+        let lo = max(idx + 1, 0)
+        let hi = min(idx + 3, pages.count - 1)
+        guard lo <= hi else { return }
+        for j in lo...hi {
             let file = pages[j]
             let stem = (file as NSString).deletingPathExtension
             ImagePipe.shared.preload(path: ImagePipe.pagePath(chapterId: chapterId, file: file),
                                      scrambleNum: ImagePipe.splitNum(chapterId: chapterId, stem: stem))
         }
+    }
+
+    /// Keep a page index inside the current chapter.
+    private func clampPage(_ p: Int) -> Int {
+        min(max(p, 0), max(pages.count - 1, 0))
     }
 }
 

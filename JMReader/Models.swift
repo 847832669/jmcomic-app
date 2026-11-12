@@ -35,6 +35,20 @@ struct Comic: Identifiable, Codable, Hashable {
         else { categoryTitle = "" }
     }
 
+    private enum CodingKeys: String, CodingKey { case id, name, author, categoryTitle }
+
+    /// Tolerant decoding: every field is optional on the wire, so a missing
+    /// or retyped field defaults instead of throwing (and, with the lossy
+    /// array decode, never discards a whole favourites snapshot).
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = (try? c.decode(String.self, forKey: .id))
+            ?? String((try? c.decode(Int.self, forKey: .id)) ?? 0)
+        name = (try? c.decode(String.self, forKey: .name)) ?? ""
+        author = (try? c.decode(String.self, forKey: .author)) ?? ""
+        categoryTitle = (try? c.decode(String.self, forKey: .categoryTitle)) ?? ""
+    }
+
     var coverURLString: String { ImagePipe.coverURLString(albumId: id) }
 }
 
@@ -194,12 +208,24 @@ struct DailyInfo {
     }
 
     var todayString: String {
+        // Explicit POSIX locale + fixed time zone: the bare formatter used
+        // the device locale, so on a 12-hour or Buddhist-calendar device this
+        // returned something the server's "01".."31" never matches.
         let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.calendar = Calendar(identifier: .gregorian)
+        f.timeZone = TimeZone(identifier: "Asia/Shanghai") ?? .current
         f.dateFormat = "dd"
-        return f.string(from: Date())
+        // Normalise to "1".."31": the calendar payload has shipped both
+        // "01" and "1" over time, which made "signed" days read as unsigned
+        // on the 1st–9th and re-triggered the check-in request.
+        return String(Int(f.string(from: Date())) ?? 0)
     }
     var todaySigned: Bool {
-        weeks.flatMap { $0 }.first { $0.date == todayString }?.signed == true
+        let today = todayString
+        return weeks.flatMap { $0 }.first {
+            String(Int($0.date) ?? -1) == today
+        }?.signed == true
     }
     var signedCount: Int {
         weeks.flatMap { $0 }.filter { $0.signed == true }.count

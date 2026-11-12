@@ -210,7 +210,52 @@ final class AccountStore: ObservableObject {
         var pages: Int
         var pageSize: Int
         var items: [Comic]
+
+        enum CodingKeys: String, CodingKey { case owner, total, pages, pageSize, items }
+
+        // Hand-written decoding: the synthesized one requires every key, so
+        // a single missing field (older snapshot, server-side change) made
+        // the whole decode throw. `hydrate` then silently returned an empty
+        // list and `ensureCloudCache` fetched page 1 and wrote that 20-item
+        // list back — quietly truncating a 1000-item favourites cache.
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            owner = (try? c.decode(String.self, forKey: .owner)) ?? ""
+            total = (try? c.decode(Int.self, forKey: .total)) ?? 0
+            pages = (try? c.decode(Int.self, forKey: .pages)) ?? 0
+            pageSize = (try? c.decode(Int.self, forKey: .pageSize)) ?? 0
+            // Drop only the unreadable entries, keep the readable ones.
+            items = (try? c.decode(LossyArray<Comic>.self, forKey: .items))?.values ?? []
+        }
+
+        init(owner: String, total: Int, pages: Int, pageSize: Int, items: [Comic]) {
+            self.owner = owner; self.total = total; self.pages = pages
+            self.pageSize = pageSize; self.items = items
+        }
     }
+
+    /// Decodes an array element by element: one malformed entry no longer
+    /// takes the whole list down with it.
+    private struct LossyArray<Element: Decodable>: Decodable {
+        var values: [Element] = []
+        init(from decoder: Decoder) throws {
+            var c = try decoder.unkeyedContainer()
+            while !c.isAtEnd {
+                if let v = try? c.decode(Skip<Element>.self).value { values.append(v) }
+                else { _ = try? c.decode(Skip<AnyDecodable>.self) }
+            }
+        }
+    }
+    private struct Skip<T: Decodable>: Decodable {
+        let value: T?
+        init(from decoder: Decoder) throws { value = try? T(from: decoder) }
+    }
+    private struct AnyDecodable: Decodable {
+        init(from decoder: Decoder) throws {}
+    }
+    /// Set when the snapshot on disk could not be read; blocks the writer so
+    /// an empty in-memory cache never replaces a good file.
+    private var cloudSnapshotUnreadable = false
     private let cloudKey = "jm.cloudFav.v1"
 
     var cloudFullyLoaded: Bool { cloudTotal > 0 && cloudFavorites.count >= cloudTotal }
@@ -512,6 +557,9 @@ final class AccountStore: ObservableObject {
     /// calls this per page) into one write with the latest state.
     private func persistCloudSnapshot() {
         guard let owner = cloudOwner else { return }
+        // Never trade a good on-disk snapshot for an empty one. Once a real
+        // list or a genuine "0 favourites" state is known, writing resumes.
+        if cloudSnapshotUnreadable && cloudFavorites.isEmpty && cloudTotal > 0 { return }
         persistGen += 1
         if persistScheduled { return }
         persistScheduled = true
@@ -549,7 +597,15 @@ final class AccountStore: ObservableObject {
         let snap = await Task.detached(priority: .userInitiated) {
             try? JSONDecoder().decode(CloudFavSnapshot.self, from: data)
         }.value
-        guard let snap, snap.owner == username else { return }
+        guard let snap else {
+            // Unreadable file: keep it (it may be recoverable by a future
+            // version) and refuse to overwrite it with whatever partial list
+            // this session manages to load.
+            cloudSnapshotUnreadable = true
+            return
+        }
+        guard snap.owner == username else { return }
+        cloudSnapshotUnreadable = false
         cloudFavorites = snap.items.filter { !isRemovedFav($0.id) }
         cloudTotal = snap.total
         cloudPage = snap.pages
@@ -730,6 +786,8 @@ final class AccountStore: ObservableObject {
         clearRemovedFavs(for: outgoing)
         UserDefaults.standard.removeObject(forKey: cloudKey)
         UserDefaults.standard.removeObject(forKey: statsKey)
+        // The unreadable file is gone now, so stop blocking the writer.
+        cloudSnapshotUnreadable = false
     }
 }
 
@@ -921,6 +979,8 @@ final class BlockTagStore: ObservableObject {
     @Published private(set) var blockedAuthors: [String] = []
     private(set) var authorCache: [String: [String]] = [:]
     private var inFlight: Set<String> = []
+    /// albumId -> last time its detail fetch failed (5-minute cooldown).
+    private var failedAt: [String: Date] = [:]
     private var persistTask: Task<Void, Never>?
 
     private let listKey = "jm.blockedTags.v1"
@@ -1043,6 +1103,11 @@ final class BlockTagStore: ObservableObject {
         // reverse) — otherwise every list appearance re-fetches the world.
         let unknown = items.map(\.id).filter { id in
             if inFlight.contains(id) { return false }
+            // Albums whose detail fetch failed were retried on EVERY list
+            // appearance (the id was never cached, and inFlight was cleared
+            // when the batch ended) — a dead line turned scrolling into an
+            // endless 24-request storm. Back off for 5 minutes per album.
+            if let failed = failedAt[id], Date().timeIntervalSince(failed) < 300 { return false }
             let needTags = !blockedTags.isEmpty && tagCache[id] == nil
             let needAuthors = !blockedAuthors.isEmpty && authorCache[id] == nil
             return needTags || needAuthors
@@ -1071,6 +1136,17 @@ final class BlockTagStore: ObservableObject {
                 let entries = results.compactMap { (id, tags, authors) -> (String, [String], [String])? in
                     guard let tags, let authors else { return nil }
                     return (id, tags, authors)
+                }
+                // Record failures so the cooldown above applies.
+                let failedIds = results.filter { $0.1 == nil || $0.2 == nil }.map(\.0)
+                if !failedIds.isEmpty {
+                    let now = Date()
+                    for id in failedIds { self.failedAt[id] = now }
+                    // Bound the map: it only needs to hold recent failures.
+                    if self.failedAt.count > 500 {
+                        let cutoff = now.addingTimeInterval(-300)
+                        self.failedAt = self.failedAt.filter { $0.value > cutoff }
+                    }
                 }
                 if self.apply(entries: entries) { self.schedulePersist() }
             }
