@@ -91,15 +91,15 @@ fun JmTheme(content: @Composable () -> Unit) {
     }
 }
 
-/** iOS-style glass card: surface fill, hairline border, large radius. */
+/** Shared glass material for profile, settings, storage and download panels. */
 @Composable
 fun IosCard(modifier: Modifier = Modifier, radius: androidx.compose.ui.unit.Dp = 20.dp,
             onClick: (() -> Unit)? = null, content: @Composable () -> Unit) {
-    androidx.compose.material3.Surface(
+    GlassSurface(
         shape = RoundedCornerShape(radius),
-        color = MaterialTheme.colorScheme.surface,
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        modifier = if (onClick != null) modifier.clickable { onClick() } else modifier,
+        radius = radius,
+        modifier = modifier,
+        onClick = onClick,
     ) { content() }
 }
 

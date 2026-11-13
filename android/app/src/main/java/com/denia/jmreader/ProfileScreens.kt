@@ -59,12 +59,12 @@ fun ProfileScreen(router: Router, account: AccountStore, library: LibraryStore) 
         if (!loggedIn) {
             Text("登录 JM 账号", fontSize = 18.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(12.dp))
-            OutlinedTextField(user, { user = it }, label = { Text("用户名") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            GlassTextField(user, { user = it }, label = { Text("用户名") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             Spacer(Modifier.height(8.dp))
-            OutlinedTextField(pass, { pass = it }, label = { Text("密码") }, singleLine = true,
+            GlassTextField(pass, { pass = it }, label = { Text("密码") }, singleLine = true,
                 visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
             Spacer(Modifier.height(12.dp))
-            Button(onClick = {
+            GlassButton(onClick = {
                 busy = true; msg = null
                 scope.launch {
                     try {
@@ -223,8 +223,8 @@ fun CheckinCard(account: AccountStore) {
                 Spacer(Modifier.width(8.dp))
                 Text(d.optString("event_name"), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.weight(1f))
-                Button(onClick = {
-                    if (todaySigned || busy) return@Button
+                GlassButton(onClick = {
+                    if (todaySigned || busy) return@GlassButton
                     busy = true
                     scope.launch {
                         try {
@@ -253,7 +253,7 @@ fun CheckinCard(account: AccountStore) {
                                     if (day == null) { Text("") } else {
                                         val signed = if (day.isNull("signed")) null else day.optBoolean("signed")
                                         val isToday = day.optString("date") == todayStr
-                                        Surface(shape = RoundedCornerShape(8.dp),
+                                        GlassSurface(shape = RoundedCornerShape(8.dp),
                                             color = when {
                                                 signed == true -> Pink
                                                 isToday -> MaterialTheme.colorScheme.surface
@@ -379,7 +379,7 @@ fun FavoritesSection(router: Router, account: AccountStore, library: LibraryStor
             items(folders.size) { i ->
                 val f = folders[i]
                 val sel = f.fid == folderId
-                Surface(
+                GlassSurface(
                     shape = RoundedCornerShape(50),
                     color = if (sel) Pink else MaterialTheme.colorScheme.surface,
                     border = if (sel) null else androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
@@ -394,7 +394,7 @@ fun FavoritesSection(router: Router, account: AccountStore, library: LibraryStor
                 }
             }
             item {
-                Surface(
+                GlassSurface(
                     shape = RoundedCornerShape(50),
                     color = MaterialTheme.colorScheme.surface,
                     border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
@@ -407,7 +407,7 @@ fun FavoritesSection(router: Router, account: AccountStore, library: LibraryStor
         Text("长按收藏夹可删除；点「整理」后点任意收藏可移动到其他收藏夹",
             fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
-    OutlinedTextField(query, { query = it }, placeholder = { Text("搜收藏（标题/作者）") }, singleLine = true,
+    GlassTextField(query, { query = it }, placeholder = { Text("搜收藏（标题/作者）") }, singleLine = true,
         shape = RoundedCornerShape(50),
         colors = OutlinedTextFieldDefaults.colors(
             unfocusedContainerColor = MaterialTheme.colorScheme.surface,
@@ -438,7 +438,7 @@ fun FavoritesSection(router: Router, account: AccountStore, library: LibraryStor
                             selectedIds = if (selectedIds.contains(album.id)) selectedIds - album.id else selectedIds + album.id
                         })
                         if (selectedIds.contains(album.id)) {
-                            Surface(shape = CircleShape, color = Pink,
+                            GlassSurface(shape = CircleShape, color = Pink,
                                 modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).size(20.dp)) {
                                 Box(contentAlignment = Alignment.Center) {
                                     Text("✓", color = Color.White, fontSize = 12.sp)
@@ -455,7 +455,7 @@ fun FavoritesSection(router: Router, account: AccountStore, library: LibraryStor
         Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("已选 ${selectedIds.size} 本", fontSize = 13.sp)
             Spacer(Modifier.weight(1f))
-            Button(onClick = {
+            GlassButton(onClick = {
                 val chosen = filtered.filter { selectedIds.contains(it.id) }
                 chosen.forEach { DownloadManager.enqueue(context, it) }
                 msg = "已把 ${chosen.size} 本加入下载，去下载页看进度"
@@ -470,11 +470,11 @@ fun FavoritesSection(router: Router, account: AccountStore, library: LibraryStor
 
     if (showCreate) {
         var name by remember { mutableStateOf("") }
-        AlertDialog(
+        GlassAlertDialog(
             onDismissRequest = { showCreate = false },
             title = { Text("新建收藏夹") },
             text = {
-                OutlinedTextField(name, { name = it }, placeholder = { Text("收藏夹名称") }, singleLine = true)
+                GlassTextField(name, { name = it }, placeholder = { Text("收藏夹名称") }, singleLine = true)
             },
             confirmButton = {
                 TextButton(enabled = name.isNotBlank(), onClick = {
@@ -500,7 +500,7 @@ fun FavoritesSection(router: Router, account: AccountStore, library: LibraryStor
     }
 
     confirmDelete?.let { f ->
-        AlertDialog(
+        GlassAlertDialog(
             onDismissRequest = { confirmDelete = null },
             title = { Text("删除收藏夹「${f.name}」？") },
             text = { Text("JM 官方的删除接口目前异常，删除会通过云端名单同步，在所有设备上隐藏这个收藏夹。") },
@@ -521,7 +521,7 @@ fun FavoritesSection(router: Router, account: AccountStore, library: LibraryStor
     }
 
     pendingMove?.let { album ->
-        AlertDialog(
+        GlassAlertDialog(
             onDismissRequest = { pendingMove = null },
             title = { Text("移动「${album.name}」到") },
             text = {
@@ -613,7 +613,7 @@ fun DetailScreen(dest: DetailDest, router: Router, account: AccountStore, librar
                         Text("作者", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             authors.forEach { au ->
-                                Surface(shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.surface,
+                                GlassSurface(shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.surface,
                                     border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                                     modifier = Modifier.combinedClickable(
                                         onClick = { router.push(AuthorDest(au)) },
@@ -636,10 +636,10 @@ fun DetailScreen(dest: DetailDest, router: Router, account: AccountStore, librar
                     }
                     Spacer(Modifier.height(16.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Button(onClick = { if (chapters.isNotEmpty()) router.push(ReaderDest(chapters.first().first, name, dest.id)) },
+                        GlassButton(onClick = { if (chapters.isNotEmpty()) router.push(ReaderDest(chapters.first().first, name, dest.id)) },
                             shape = RoundedCornerShape(14.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = Pink)) { Text("开始阅读", color = Color.White) }
-                        OutlinedButton(onClick = {
+                        GlassOutlinedButton(onClick = {
                             if (fav && account.isLoggedIn) {
                                 scope.launch {
                                     try {
@@ -667,14 +667,14 @@ fun DetailScreen(dest: DetailDest, router: Router, account: AccountStore, librar
                                 toast = "已收藏"
                             }
                         }, shape = RoundedCornerShape(14.dp)) { Text(if (fav) "已收藏" else "收藏", color = Pink) }
-                        OutlinedButton(onClick = { DownloadManager.enqueue(context, albumModel); toast = "已加入下载，去下载页看进度" },
+                        GlassOutlinedButton(onClick = { DownloadManager.enqueue(context, albumModel); toast = "已加入下载，去下载页看进度" },
                             shape = RoundedCornerShape(14.dp)) {
                             Text("下载", color = Pink)
                         }
                     }
                     toast?.let { Text(it, color = Pink, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp)) }
                     if (showFolderPick) {
-                        AlertDialog(
+                        GlassAlertDialog(
                             onDismissRequest = { showFolderPick = false },
                             title = { Text("收藏到") },
                             text = {
@@ -738,7 +738,7 @@ private fun FlowRowTags(tags: List<String>, onLongPress: (String) -> Unit = {}) 
         rows.forEach { r ->
             Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 r.forEach { tag ->
-                    Surface(shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.surface,
+                    GlassSurface(shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.surface,
                         border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                         modifier = Modifier.combinedClickable(onClick = {}, onLongClick = { onLongPress(tag) })) {
                         Text(tag, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp))
@@ -831,10 +831,10 @@ fun BlockedTagsScreen(router: Router) {
             Text("屏蔽标签", fontWeight = FontWeight.Bold, fontSize = 15.sp)
             Spacer(Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(input, { input = it }, placeholder = { Text("输入要屏蔽的标签") },
+                GlassTextField(input, { input = it }, placeholder = { Text("输入要屏蔽的标签") },
                     singleLine = true, modifier = Modifier.weight(1f))
                 Spacer(Modifier.width(8.dp))
-                Button(onClick = { BlockTags.add(input); input = "" }, enabled = input.isNotBlank(),
+                GlassButton(onClick = { BlockTags.add(input); input = "" }, enabled = input.isNotBlank(),
                     colors = ButtonDefaults.buttonColors(containerColor = Pink)) {
                     Text("添加", color = Color.White)
                 }
@@ -857,10 +857,10 @@ fun BlockedTagsScreen(router: Router) {
             Text("屏蔽作者", fontWeight = FontWeight.Bold, fontSize = 15.sp)
             Spacer(Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(authorInput, { authorInput = it }, placeholder = { Text("输入要屏蔽的作者") },
+                GlassTextField(authorInput, { authorInput = it }, placeholder = { Text("输入要屏蔽的作者") },
                     singleLine = true, modifier = Modifier.weight(1f))
                 Spacer(Modifier.width(8.dp))
-                Button(onClick = { BlockTags.addAuthor(authorInput); authorInput = "" }, enabled = authorInput.isNotBlank(),
+                GlassButton(onClick = { BlockTags.addAuthor(authorInput); authorInput = "" }, enabled = authorInput.isNotBlank(),
                     colors = ButtonDefaults.buttonColors(containerColor = Pink)) {
                     Text("添加", color = Color.White)
                 }
@@ -952,7 +952,7 @@ fun StorageScreen(router: Router) {
                 }
             }
             Spacer(Modifier.height(14.dp))
-            Button(
+            GlassButton(
                 onClick = { confirm = true },
                 enabled = imgBytes > 0 && !cleared,
                 shape = RoundedCornerShape(14.dp),
@@ -968,7 +968,7 @@ fun StorageScreen(router: Router) {
     }
 
     if (confirm) {
-        AlertDialog(
+        GlassAlertDialog(
             onDismissRequest = { confirm = false },
             title = { Text("清理图片缓存？") },
             text = { Text("将清掉 ${fmt(imgBytes)} 图片缓存，已下载的漫画不受影响。") },

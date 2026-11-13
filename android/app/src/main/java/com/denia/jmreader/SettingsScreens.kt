@@ -130,8 +130,8 @@ fun LinesScreen(router: Router) {
                     latText(apiLat, line.host, testingApi)) { Lines.pinApi(line.host) }
             }
             Spacer(Modifier.height(8.dp))
-            Button(onClick = {
-                if (testingApi) return@Button
+            GlassButton(onClick = {
+                if (testingApi) return@GlassButton
                 testingApi = true
                 scope.launch {
                     val out = mutableMapOf<String, Long?>()
@@ -154,8 +154,8 @@ fun LinesScreen(router: Router) {
                     latText(imgLat, host, testingImg)) { Lines.pinImg(host) }
             }
             Spacer(Modifier.height(8.dp))
-            Button(onClick = {
-                if (testingImg) return@Button
+            GlassButton(onClick = {
+                if (testingImg) return@GlassButton
                 testingImg = true
                 scope.launch {
                     val out = mutableMapOf<String, Long?>()
@@ -176,8 +176,8 @@ fun LinesScreen(router: Router) {
             }
 
             Spacer(Modifier.height(20.dp))
-            OutlinedButton(onClick = {
-                if (refreshing) return@OutlinedButton
+            GlassOutlinedButton(onClick = {
+                if (refreshing) return@GlassOutlinedButton
                 refreshing = true
                 scope.launch { Lines.refresh(true); refreshing = false }
             }, enabled = !refreshing, shape = RoundedCornerShape(14.dp),

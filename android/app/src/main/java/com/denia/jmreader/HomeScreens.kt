@@ -125,7 +125,7 @@ fun HomeScreen(router: Router, goProfile: () -> Unit, goSearch: () -> Unit = {})
             Image(painterResource(R.drawable.avatar), contentDescription = null,
                 modifier = Modifier.size(40.dp).clip(CircleShape).clickable { goProfile() })
             Spacer(Modifier.width(10.dp))
-            Surface(shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.surface,
+            GlassSurface(shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.surface,
                 border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                 modifier = Modifier.weight(1f).clickable { goSearch() }) {
                 Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -137,7 +137,7 @@ fun HomeScreen(router: Router, goProfile: () -> Unit, goSearch: () -> Unit = {})
             }
             Spacer(Modifier.width(10.dp))
             Box {
-                Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surface,
+                GlassSurface(shape = CircleShape, color = MaterialTheme.colorScheme.surface,
                     border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                     modifier = Modifier.size(40.dp).clickable { router.push(DownloadsDest) }) {
                     Box(contentAlignment = Alignment.Center) {
@@ -167,7 +167,7 @@ fun ScrollableChannelRow(names: List<String>, selected: Int, onSelect: (Int) -> 
     LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         items(names.indices.toList()) { i ->
             val sel = i == selected
-            Surface(
+            GlassSurface(
                 shape = RoundedCornerShape(50),
                 color = if (sel) Pink else MaterialTheme.colorScheme.surface,
                 border = if (sel) null else androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
@@ -241,7 +241,7 @@ fun OptionChipRow(options: List<String>, selected: Int, onSelect: (Int) -> Unit)
         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)) {
         items(options.size) { i ->
             val sel = i == selected
-            Surface(
+            GlassSurface(
                 shape = RoundedCornerShape(50),
                 color = if (sel) Pink else MaterialTheme.colorScheme.surface,
                 border = if (sel) null else androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
@@ -290,7 +290,7 @@ fun SearchScreen(router: Router, history: HistoryStore) {
     }
 
     Column(Modifier.fillMaxSize().padding(top = 10.dp)) {
-        OutlinedTextField(
+        GlassTextField(
             value = query, onValueChange = { query = it },
             placeholder = { Text("搜索标题 / 作者") },
             singleLine = true,
@@ -330,7 +330,7 @@ fun SearchScreen(router: Router, history: HistoryStore) {
                 }
                 LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(queries) { q ->
-                        Surface(shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.surface,
+                        GlassSurface(shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.surface,
                             border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                             modifier = Modifier.clickable { query = q; submitted = q }) {
                             Text(q, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp))
@@ -381,8 +381,11 @@ fun CategoryPage(dest: CategoryDest, router: Router) {
 
 @Composable
 fun TopBar(title: String, onBack: () -> Unit) {
+    GlassSurface(modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
+        shape = RoundedCornerShape(24.dp), radius = 24.dp) {
     Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         TextButton(onClick = onBack) { Text("‹ 返回", color = Pink, fontSize = 15.sp) }
         Text(title, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
     }
 }

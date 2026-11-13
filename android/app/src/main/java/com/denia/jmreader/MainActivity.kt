@@ -5,40 +5,14 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.layout.statusBars
-import androidx.compose.ui.draw.shadow
-import dev.chrisbanes.haze.hazeEffect
-import dev.chrisbanes.haze.hazeSource
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Apps
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.Icon
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -107,95 +81,58 @@ fun JmApp(externalPdf: android.net.Uri? = null, onExternalPdfDone: () -> Unit = 
 
     var viewingExternal by remember { mutableStateOf<java.io.File?>(null) }
     JmTheme {
-        if (viewingExternal != null) {
-            PdfViewerScreen(viewingExternal!!) { viewingExternal = null }
-            return@JmTheme
-        }
-        if (externalPdf != null) {
-            ExternalPdfOpener(externalPdf,
-                onReady = { f -> viewingExternal = f; onExternalPdfDone() },
-                onFail = { onExternalPdfDone() })
-            return@JmTheme
-        }
-        val hazeState = remember { dev.chrisbanes.haze.HazeState() }
-        val surface = androidx.compose.material3.MaterialTheme.colorScheme.surface
-        val outline = androidx.compose.material3.MaterialTheme.colorScheme.outlineVariant
-        Box(Modifier.fillMaxSize().background(androidx.compose.material3.MaterialTheme.colorScheme.background)) {
-            Box(Modifier.fillMaxSize()
-                .windowInsetsPadding(androidx.compose.foundation.layout.WindowInsets.statusBars)
-                .hazeSource(hazeState)) {
-                val top = router.stack.lastOrNull()
-                if (top == null) {
-                    HorizontalPager(state = pagerState) { page ->
-                        when (page) {
-                            0 -> HomeScreen(router,
-                                goProfile = { scope.launch { pagerState.animateScrollToPage(2) } },
-                                goSearch = { scope.launch { pagerState.animateScrollToPage(3) } })
-                            1 -> CategoriesScreen(router)
-                            2 -> ProfileScreen(router, account, library)
-                            else -> SearchScreen(router, history)
-                        }
-                    }
-                } else {
-                    when (top) {
-                        is DetailDest -> DetailScreen(top, router, account, library)
-                        is ReaderDest -> ReaderScreen(top, router)
-                        is AuthorDest -> AuthorScreen(top, router)
-                        is CategoryDest -> CategoryPage(top, router)
-                        DownloadsDest -> DownloadsScreen(router)
-                        BlockedTagsDest -> BlockedTagsScreen(router)
-                        StorageDest -> StorageScreen(router)
-                        SettingsDest -> SettingsScreen(router, account)
-                        LinesDest -> LinesScreen(router)
-                    }
-                }
-            }
-            if (router.stack.isEmpty()) {
-                // iOS-style floating FROSTED glass tab bar (real backdrop blur via Haze;
-                // devices/emulators without RenderEffect fall back to a translucent scrim)
-                val items = listOf(
-                    Triple("首页", Icons.Default.Home, 0),
-                    Triple("分类", Icons.Default.Apps, 1),
-                    Triple("个人", Icons.Default.Person, 2),
-                    Triple("搜索", Icons.Default.Search, 3),
-                )
-                val capsule = androidx.compose.foundation.shape.RoundedCornerShape(percent = 50)
-                Box(
-                    Modifier.align(Alignment.BottomCenter).fillMaxWidth()
-                        .padding(horizontal = 24.dp, vertical = 12.dp)
-                        .shadow(12.dp, capsule)
-                        .clip(capsule)
-                        .hazeEffect(hazeState) {
-                            backgroundColor = surface
-                            tints = listOf(dev.chrisbanes.haze.HazeTint(surface.copy(alpha = 0.55f)))
-                            blurRadius = 24.dp
-                            noiseFactor = 0f
-                            fallbackTint = dev.chrisbanes.haze.HazeTint(surface.copy(alpha = 0.88f))
-                        }
-                        .border(1.dp, outline, capsule)
-                        .padding(horizontal = 6.dp, vertical = 5.dp)
-                ) {
-                    Row(Modifier.fillMaxWidth(),
-                        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceEvenly) {
-                        items.forEach { (label, icon, page) ->
-                            val sel = tab == page
-                            Box(
-                                Modifier.clip(androidx.compose.foundation.shape.RoundedCornerShape(22.dp))
-                                    .background(if (sel) Pink.copy(alpha = 0.14f) else androidx.compose.ui.graphics.Color.Transparent)
-                                    .clickable { scope.launch { pagerState.animateScrollToPage(page) } }
-                                    .padding(horizontal = 17.dp, vertical = 4.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Icon(icon, contentDescription = label,
-                                        tint = if (sel) Pink else androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(21.dp))
-                                    Text(label, fontSize = 10.sp,
-                                        color = if (sel) Pink else androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant)
+        val wallpaper = rememberGlassBackdrop()
+        val scene = rememberGlassBackdrop()
+        CompositionLocalProvider(LocalGlassBackdrop provides wallpaper) {
+            Box(Modifier.fillMaxSize()) {
+                Box(Modifier.fillMaxSize().glassBackdrop(scene)) {
+                    Box(Modifier.fillMaxSize().glassBackdrop(wallpaper)) { GlassWallpaper() }
+                    Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.statusBars)) {
+                        when {
+                            viewingExternal != null -> PdfViewerScreen(viewingExternal!!) { viewingExternal = null }
+                            externalPdf != null -> ExternalPdfOpener(externalPdf,
+                                onReady = { f -> viewingExternal = f; onExternalPdfDone() },
+                                onFail = { onExternalPdfDone() })
+                            else -> {
+                                val top = router.stack.lastOrNull()
+                                if (top == null) {
+                                    HorizontalPager(state = pagerState) { page ->
+                                        when (page) {
+                                            0 -> HomeScreen(router,
+                                                goProfile = { scope.launch { pagerState.animateScrollToPage(2) } },
+                                                goSearch = { scope.launch { pagerState.animateScrollToPage(3) } })
+                                            1 -> CategoriesScreen(router)
+                                            2 -> ProfileScreen(router, account, library)
+                                            else -> SearchScreen(router, history)
+                                        }
+                                    }
+                                } else {
+                                    when (top) {
+                                        is DetailDest -> DetailScreen(top, router, account, library)
+                                        is ReaderDest -> ReaderScreen(top, router)
+                                        is AuthorDest -> AuthorScreen(top, router)
+                                        is CategoryDest -> CategoryPage(top, router)
+                                        DownloadsDest -> DownloadsScreen(router)
+                                        BlockedTagsDest -> BlockedTagsScreen(router)
+                                        StorageDest -> StorageScreen(router)
+                                        SettingsDest -> SettingsScreen(router, account)
+                                        LinesDest -> LinesScreen(router)
+                                    }
                                 }
                             }
                         }
                     }
+                }
+                if (router.stack.isEmpty() && viewingExternal == null && externalPdf == null) {
+                    LiquidGlassBottomBar(
+                        selectedPage = tab,
+                        pagePosition = pagerState.currentPage + pagerState.currentPageOffsetFraction,
+                        backdrop = scene,
+                        onSelect = { page -> scope.launch { pagerState.animateScrollToPage(page) } },
+                        modifier = Modifier.align(Alignment.BottomCenter)
+                            .windowInsetsPadding(WindowInsets.navigationBars)
+                            .padding(horizontal = 20.dp, vertical = 12.dp),
+                    )
                 }
             }
         }

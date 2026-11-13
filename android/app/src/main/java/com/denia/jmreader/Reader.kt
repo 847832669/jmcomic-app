@@ -99,26 +99,30 @@ fun ReaderScreen(dest: ReaderDest, router: Router) {
             ReadingStats.recordPage(dest.chapterId, pageNow - 1, files.size)
         }
 
-        Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = { router.pop() }) { Text("‹ 返回", color = Pink, fontSize = 15.sp) }
-            Column(Modifier.weight(1f)) {
-                Text(ch.optString("name").ifEmpty { dest.albumTitle }, fontSize = 14.sp, fontWeight = FontWeight.Bold,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(dest.albumTitle, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            Text("$pageNow / ${files.size}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = {
-                mode = if (mode == "page") "scroll" else "page"
-                Settings.updateReaderMode(mode)
-                if (mode == "page") pageIdx = (scrollPage - 1).coerceIn(0, maxOf(0, files.size - 1))
-            }) { Text(if (mode == "page") "翻页模式 · 切回滚动" else "滚动模式 · 切到翻页", color = Pink, fontSize = 12.sp) }
-            Spacer(Modifier.weight(1f))
-            if (mode == "page") {
-                TextButton(onClick = { rtl = !rtl; Settings.updateReaderRtl(rtl) }) {
-                    Text(if (rtl) "方向：从右往左" else "方向：从左往右", color = Pink, fontSize = 12.sp)
+        GlassSurface(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp)) {
+            Column {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = { router.pop() }) { Text("‹ 返回", color = Pink, fontSize = 15.sp) }
+                    Column(Modifier.weight(1f)) {
+                        Text(ch.optString("name").ifEmpty { dest.albumTitle }, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(dest.albumTitle, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    Text("$pageNow / ${files.size}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = {
+                        mode = if (mode == "page") "scroll" else "page"
+                        Settings.updateReaderMode(mode)
+                        if (mode == "page") pageIdx = (scrollPage - 1).coerceIn(0, maxOf(0, files.size - 1))
+                    }) { Text(if (mode == "page") "翻页模式 · 切回滚动" else "滚动模式 · 切到翻页", color = Pink, fontSize = 12.sp) }
+                    Spacer(Modifier.weight(1f))
+                    if (mode == "page") {
+                        TextButton(onClick = { rtl = !rtl; Settings.updateReaderRtl(rtl) }) {
+                            Text(if (rtl) "方向：从右往左" else "方向：从左往右", color = Pink, fontSize = 12.sp)
+                        }
+                    }
                 }
             }
         }
@@ -150,19 +154,21 @@ fun ReaderScreen(dest: ReaderDest, router: Router) {
 
 @Composable
 private fun ChapterNavRow(curIdx: Int, series: List<Pair<String, String>>, dest: ReaderDest, router: Router) {
-    Row(Modifier.fillMaxWidth().padding(18.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-        if (curIdx > 0) {
-            OutlinedButton(onClick = {
-                router.pop()
-                router.push(ReaderDest(series[curIdx - 1].first, dest.albumTitle, dest.albumId))
-            }) { Text("上一章", color = Pink) }
-        } else Spacer(Modifier.width(1.dp))
-        if (curIdx >= 0 && curIdx < series.size - 1) {
-            Button(onClick = {
-                router.pop()
-                router.push(ReaderDest(series[curIdx + 1].first, dest.albumTitle, dest.albumId))
-            }, colors = ButtonDefaults.buttonColors(containerColor = Pink)) {
-                Text("下一章", color = androidx.compose.ui.graphics.Color.White)
+    GlassSurface(Modifier.fillMaxWidth().padding(8.dp)) {
+        Row(Modifier.fillMaxWidth().padding(18.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+            if (curIdx > 0) {
+                GlassOutlinedButton(onClick = {
+                    router.pop()
+                    router.push(ReaderDest(series[curIdx - 1].first, dest.albumTitle, dest.albumId))
+                }) { Text("上一章", color = Pink) }
+            } else Spacer(Modifier.width(1.dp))
+            if (curIdx >= 0 && curIdx < series.size - 1) {
+                GlassButton(onClick = {
+                    router.pop()
+                    router.push(ReaderDest(series[curIdx + 1].first, dest.albumTitle, dest.albumId))
+                }, colors = ButtonDefaults.buttonColors(containerColor = Pink)) {
+                    Text("下一章", color = androidx.compose.ui.graphics.Color.White)
+                }
             }
         }
     }
