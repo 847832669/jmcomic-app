@@ -1,6 +1,8 @@
 package com.denia.jmreader
 
 import org.json.JSONObject
+import java.time.Instant
+import java.time.ZoneId
 
 data class JmComment(
     val id: String,
@@ -8,6 +10,7 @@ data class JmComment(
     val html: String,
     val time: String,
     val photo: String,
+    val parentId: String = "",
 ) {
     val stableKey: String get() = id.ifEmpty { "$username\u0000$time\u0000$html" }
 }
@@ -32,6 +35,7 @@ data class JmCommentPage(
                 JmComment(
                     field("CID"), field("nickname").ifBlank { field("username").ifBlank { "匿名用户" } },
                     field("content"), field("addtime"), field("photo"),
+                    field("parent_CID").takeUnless { it == "0" } ?: "",
                 )
             }.distinctBy { it.stableKey }
             return JmCommentPage(comments, total, page, size,
@@ -47,6 +51,85 @@ data class JmCommentPage(
             return message.ifBlank { "评论已发送" }
         }
     }
+}
+
+data class JmCommentThread(val comment: JmComment, val replies: List<JmCommentThread>)
+
+fun threadComments(comments: List<JmComment>): List<JmCommentThread> {
+    class MutableThread(val comment: JmComment) {
+        val replies = mutableListOf<MutableThread>()
+    }
+
+    val nodes = comments.distinctBy { it.stableKey }.map { MutableThread(it) }
+    val byId = nodes.filter { it.comment.id.isNotBlank() }.associateBy { it.comment.id }
+    val roots = mutableListOf<MutableThread>()
+    for (node in nodes) {
+        val parent = byId[node.comment.parentId]
+        if (node.comment.parentId.isNotBlank() && parent != null && parent !== node) parent.replies += node
+        else roots += node
+    }
+
+    val visited = mutableSetOf<MutableThread>()
+    fun freeze(node: MutableThread): JmCommentThread {
+        visited += node
+        return JmCommentThread(node.comment, node.replies.filter { it !in visited }.map(::freeze))
+    }
+    val result = roots.map(::freeze).toMutableList()
+    nodes.forEach { if (it !in visited) result += freeze(it) }
+    return result
+}
+
+fun filterCommentThreadsByKeywords(
+    threads: List<JmCommentThread>,
+    keywords: List<String>,
+): List<JmCommentThread> {
+    val terms = keywords.map(String::trim).filter(String::isNotEmpty)
+    if (terms.isEmpty()) return threads
+
+    fun matches(comment: JmComment): Boolean {
+        val text = comment.html
+            .replace(Regex("(?is)<(script|style)\\b[^>]*>.*?</\\1\\s*>"), " ")
+            .replace(Regex("(?is)<(?:br\\b|/?(?:p|div|li)\\b)[^>]*>"), " ")
+            .replace(Regex("(?s)<[^>]*>"), "")
+            .replace(Regex("(?i)&(#x[0-9a-f]{1,6}|#\\d{1,7}|amp|lt|gt|quot|apos|nbsp);?")) { match ->
+                val entity = match.groupValues[1]
+                when {
+                    entity.equals("amp", true) -> "&"
+                    entity.equals("lt", true) -> "<"
+                    entity.equals("gt", true) -> ">"
+                    entity.equals("quot", true) -> "\""
+                    entity.equals("apos", true) -> "'"
+                    entity.equals("nbsp", true) -> " "
+                    entity.startsWith("#x", true) -> entity.drop(2).toIntOrNull(16)
+                        ?.takeIf(Character::isValidCodePoint)?.let(Character::toChars)?.concatToString() ?: " "
+                    entity.startsWith("#") -> entity.drop(1).toIntOrNull()
+                        ?.takeIf(Character::isValidCodePoint)?.let(Character::toChars)?.concatToString() ?: " "
+                    else -> match.value
+                }
+            }
+            .replace(Regex("\\s+"), " ")
+        return terms.any { text.contains(it, ignoreCase = true) }
+    }
+
+    fun filter(thread: JmCommentThread): JmCommentThread? {
+        if (matches(thread.comment)) return null
+        val replies = thread.replies.mapNotNull(::filter)
+        return thread.copy(replies = replies)
+    }
+
+    return threads.mapNotNull(::filter)
+}
+
+fun albumUpdateDate(value: String, zoneId: ZoneId = ZoneId.systemDefault()): String? {
+    val raw = value.trim().takeUnless { it.isEmpty() || it == "null" } ?: return null
+    val timestamp = raw.toLongOrNull()
+    if (timestamp != null) {
+        if (timestamp <= 0) return null
+        val seconds = if (timestamp > 9_999_999_999L) timestamp / 1000 else timestamp
+        return runCatching { Instant.ofEpochSecond(seconds).atZone(zoneId).toLocalDate().toString() }.getOrNull()
+    }
+    val date = raw.take(10)
+    return date.takeIf { Regex("\\d{4}-\\d{2}-\\d{2}").matches(it) }
 }
 
 interface CommunitySource {

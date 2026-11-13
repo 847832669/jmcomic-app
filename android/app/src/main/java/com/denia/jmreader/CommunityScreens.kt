@@ -6,6 +6,7 @@ import android.text.style.URLSpan
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
@@ -25,6 +26,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.text.HtmlCompat
 import coil.compose.AsyncImage
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
 /** Display server HTML as selectable native text, without a WebView or script execution. */
@@ -84,8 +86,8 @@ fun AlbumDescription(html: String) {
 }
 
 @Composable
-private fun CommentCard(comment: JmComment, preview: Boolean = false) {
-    IosCard(Modifier.fillMaxWidth()) {
+private fun CommentCard(comment: JmComment, depth: Int = 0) {
+    IosCard(Modifier.fillMaxWidth().padding(start = (depth.coerceAtMost(4) * 14).dp)) {
         Column(Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 val avatar = JmApi.avatarUrl(comment.photo)
@@ -101,34 +103,16 @@ private fun CommentCard(comment: JmComment, preview: Boolean = false) {
                 }
             }
             Spacer(Modifier.height(8.dp))
-            CommunityText(comment.html, maxLines = if (preview) 3 else Int.MAX_VALUE)
+            CommunityText(comment.html)
         }
     }
 }
 
 @Composable
-fun AlbumCommentsPreview(albumId: String, initialCount: String,
-                         source: CommunitySource = JmCommunitySource, onOpen: () -> Unit) {
-    var page by remember(albumId) { mutableStateOf<JmCommentPage?>(null) }
-    var failed by remember(albumId) { mutableStateOf(false) }
-    LaunchedEffect(albumId) {
-        try { page = source.comments(albumId, 1, 10) }
-        catch (e: CancellationException) { throw e }
-        catch (e: Exception) { failed = true }
-    }
-    Column(Modifier.fillMaxWidth().padding(top = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("评论", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-            val count = page?.total?.toString() ?: initialCount
-            if (count.isNotBlank()) Text(count, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        when {
-            failed -> Text("评论暂时无法加载，可进入评论区重试", fontSize = 13.sp)
-            page == null -> LinearProgressIndicator(Modifier.fillMaxWidth())
-            page!!.comments.isEmpty() -> Text("暂无评论，来发表第一条吧", fontSize = 13.sp)
-            else -> page!!.comments.take(2).forEach { CommentCard(it, preview = true) }
-        }
-        GlassOutlinedButton(onOpen, Modifier.fillMaxWidth()) { Text("查看全部评论") }
+private fun CommentThreadCard(thread: JmCommentThread, depth: Int = 0) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        CommentCard(thread.comment, depth = depth)
+        thread.replies.forEach { CommentThreadCard(it, depth + 1) }
     }
 }
 
@@ -136,6 +120,7 @@ fun AlbumCommentsPreview(albumId: String, initialCount: String,
 fun CommentsScreen(dest: CommentsDest, onBack: () -> Unit, isLoggedIn: Boolean,
                    onLogin: () -> Unit, source: CommunitySource = JmCommunitySource) {
     val scope = rememberCoroutineScope()
+    val listState = rememberLazyListState()
     var comments by remember(dest.id) { mutableStateOf(emptyList<JmComment>()) }
     var nextPage by remember(dest.id) { mutableIntStateOf(1) }
     var pageSize by remember(dest.id) { mutableIntStateOf(10) }
@@ -167,7 +152,25 @@ fun CommentsScreen(dest: CommentsDest, onBack: () -> Unit, isLoggedIn: Boolean,
         finally { loading = false }
     }
 
+    val visibleThreads by remember(dest.id) {
+        derivedStateOf {
+            filterCommentThreadsByKeywords(threadComments(comments), Settings.commentBlockedKeywords)
+        }
+    }
     LaunchedEffect(dest.id, reload) { load(1) }
+    LaunchedEffect(dest.id, listState) {
+        snapshotFlow {
+            val layout = listState.layoutInfo
+            val lastVisible = layout.visibleItemsInfo.lastOrNull()?.index ?: return@snapshotFlow null
+            // Wait for appended rows to be measured before checking the old viewport again.
+            if (layout.totalItemsCount != visibleThreads.size + 1) return@snapshotFlow null
+            // Include the page number so a fully filtered page can immediately advance again.
+            if (loaded && hasMore && !loading && failure == null &&
+                lastVisible >= layout.totalItemsCount - 2) nextPage else null
+        }.distinctUntilChanged().collect { page ->
+            if (page != null) load(page)
+        }
+    }
     Column(Modifier.fillMaxSize().imePadding().navigationBarsPadding()) {
         TopBar("评论${total?.let { " · $it" } ?: ""}", onBack)
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -175,19 +178,26 @@ fun CommentsScreen(dest: CommentsDest, onBack: () -> Unit, isLoggedIn: Boolean,
                 modifier = Modifier.weight(1f), fontSize = 13.sp)
             TextButton(onClick = { reload++ }, enabled = !loading && !sending) { Text("刷新评论") }
         }
-        LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(16.dp),
+        LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            items(comments, key = { it.stableKey }) { CommentCard(it) }
+            items(visibleThreads, key = { it.comment.stableKey }) { CommentThreadCard(it) }
             item {
                 when {
                     loading -> Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(Modifier.size(26.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            CircularProgressIndicator(Modifier.size(22.dp))
+                            Text("正在加载评论", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     }
                     failure != null -> ErrorText(failure!!) { scope.launch { load(failedPage) } }
                     loaded && comments.isEmpty() -> Text("暂无评论，来发表第一条吧")
-                    loaded && hasMore -> GlassOutlinedButton({ scope.launch { load(nextPage) } }, Modifier.fillMaxWidth()) {
-                        Text("加载更多评论")
-                    }
+                    loaded && visibleThreads.isEmpty() && comments.isNotEmpty() && hasMore -> Text(
+                        "正在筛选并加载更多评论", fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    loaded && visibleThreads.isEmpty() && comments.isNotEmpty() -> Text(
+                        "当前评论均命中屏蔽关键词", fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    loaded && hasMore -> Spacer(Modifier.height(4.dp))
                     loaded -> Text("已显示全部评论", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }

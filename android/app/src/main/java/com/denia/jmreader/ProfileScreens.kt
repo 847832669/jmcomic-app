@@ -13,6 +13,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Comment
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -603,7 +605,7 @@ fun DetailScreen(dest: DetailDest, router: Router, account: AccountStore, librar
                         Column {
                             Text(name, fontSize = 17.sp, fontWeight = FontWeight.Bold)
                             Spacer(Modifier.height(6.dp))
-                            Text("浏览 ${d.optString("total_views")} · 点赞 ${d.optString("likes")}", fontSize = 12.sp,
+                            Text("点赞 ${d.optString("likes")}", fontSize = 12.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Text("章节 ${chapters.size}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
@@ -634,10 +636,17 @@ fun DetailScreen(dest: DetailDest, router: Router, account: AccountStore, librar
                             }
                         }
                     }
+                    Spacer(Modifier.height(12.dp))
+                    Text("信息", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    AlbumMetadataRow("浏览量", d.optString("total_views").takeUnless { it == "null" }.orEmpty().ifBlank { "—" },
+                        Color(0xFFCDE8FF))
+                    AlbumMetadataRow("更新时间", albumUpdateDate(d.optString("addtime")).orEmpty().ifBlank { "—" },
+                        Color(0xFFFFD9E4))
                     AlbumDescription(d.optString("description").takeUnless { it == "null" } ?: "")
                     Spacer(Modifier.height(16.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         GlassButton(onClick = { if (chapters.isNotEmpty()) router.push(ReaderDest(chapters.first().first, name, dest.id)) },
+                            modifier = Modifier.weight(1f),
                             shape = RoundedCornerShape(14.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = Pink)) { Text("开始阅读", color = Color.White) }
                         GlassOutlinedButton(onClick = {
@@ -667,10 +676,20 @@ fun DetailScreen(dest: DetailDest, router: Router, account: AccountStore, librar
                                 library.addFavorite(albumModel); fav = true
                                 toast = "已收藏"
                             }
-                        }, shape = RoundedCornerShape(14.dp)) { Text(if (fav) "已收藏" else "收藏", color = Pink) }
+                        }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(14.dp)) { Text(if (fav) "已收藏" else "收藏", color = Pink) }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         GlassOutlinedButton(onClick = { DownloadManager.enqueue(context, albumModel); toast = "已加入下载，去下载页看进度" },
+                            modifier = Modifier.weight(1f),
                             shape = RoundedCornerShape(14.dp)) {
                             Text("下载", color = Pink)
+                        }
+                        GlassOutlinedButton(onClick = { router.push(CommentsDest(dest.id, name)) },
+                            modifier = Modifier.weight(1f), shape = RoundedCornerShape(14.dp)) {
+                            Icon(Icons.AutoMirrored.Filled.Comment, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("评论", color = Pink)
                         }
                     }
                     toast?.let { Text(it, color = Pink, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp)) }
@@ -702,9 +721,6 @@ fun DetailScreen(dest: DetailDest, router: Router, account: AccountStore, librar
                             confirmButton = {},
                             dismissButton = { TextButton(onClick = { showFolderPick = false }) { Text("取消") } },
                         )
-                    }
-                    AlbumCommentsPreview(dest.id, d.optString("comment_total")) {
-                        router.push(CommentsDest(dest.id, name))
                     }
                     Spacer(Modifier.height(18.dp))
                     Text("章节", fontWeight = FontWeight.Bold, fontSize = 15.sp)
@@ -762,6 +778,20 @@ fun AuthorScreen(dest: AuthorDest, router: Router) {
             val (_, all, _) = JmApi.search(dest.name, p)
             all.filter { it.author.contains(dest.name) }
         }, router = router, key = "author-${dest.name}")
+    }
+}
+
+@Composable
+private fun AlbumMetadataRow(label: String, value: String, labelColor: Color) {
+    Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        GlassSurface(shape = RoundedCornerShape(50), color = labelColor) {
+            Text(label, fontSize = 13.sp, color = Color(0xFF26313A),
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp))
+        }
+        GlassSurface(shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.surfaceVariant) {
+            Text(value, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp))
+        }
     }
 }
 

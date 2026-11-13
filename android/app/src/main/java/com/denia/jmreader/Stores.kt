@@ -430,6 +430,8 @@ object Settings {
         private set
     var readerRtl by mutableStateOf(false)
         private set
+    var commentBlockedKeywords by mutableStateOf<List<String>>(emptyList())
+        private set
 
     fun init(context: Context) {
         if (prefs != null) return
@@ -439,6 +441,8 @@ object Settings {
         themeMode = p.getString("themeMode", "system")?.takeIf { it in themeModes } ?: "system"
         readerMode = p.getString("readerMode", "scroll") ?: "scroll"
         readerRtl = p.getBoolean("readerRtl", false)
+        commentBlockedKeywords = p.getStringSet("commentBlockedKeywords", emptySet())
+            .orEmpty().toList().distinctBy { it.lowercase() }.sortedBy { it.lowercase() }
     }
 
     fun updateAutoCheckIn(v: Boolean) { autoCheckIn = v; prefs?.edit()?.putBoolean("autoCheckIn", v)?.apply() }
@@ -449,6 +453,21 @@ object Settings {
     }
     fun updateReaderMode(v: String) { readerMode = v; prefs?.edit()?.putString("readerMode", v)?.apply() }
     fun updateReaderRtl(v: Boolean) { readerRtl = v; prefs?.edit()?.putBoolean("readerRtl", v)?.apply() }
+    fun addCommentBlockedKeyword(raw: String): Boolean {
+        val keyword = raw.trim()
+        if (keyword.isEmpty() || commentBlockedKeywords.any { it.equals(keyword, ignoreCase = true) }) return false
+        updateCommentBlockedKeywords(commentBlockedKeywords + keyword)
+        return true
+    }
+    fun removeCommentBlockedKeyword(keyword: String) {
+        updateCommentBlockedKeywords(commentBlockedKeywords.filterNot { it == keyword })
+    }
+    private fun updateCommentBlockedKeywords(values: List<String>) {
+        val unique = values.map(String::trim).filter(String::isNotEmpty)
+            .distinctBy { it.lowercase() }.sortedBy { it.lowercase() }
+        commentBlockedKeywords = unique
+        prefs?.edit()?.putStringSet("commentBlockedKeywords", unique.toSet())?.apply()
+    }
 
     var autoCheckinDay: String
         get() = prefs?.getString("autoCheckinDay", "") ?: ""
