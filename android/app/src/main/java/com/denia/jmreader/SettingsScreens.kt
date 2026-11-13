@@ -31,6 +31,25 @@ fun SettingsScreen(router: Router, account: AccountStore) {
         TopBar(title = "设置") { router.pop() }
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
             IosCard(radius = 16.dp, modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("外观", fontSize = 16.sp)
+                    Spacer(Modifier.height(12.dp))
+                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                        listOf("system" to "跟随系统", "light" to "日间", "dark" to "夜间")
+                            .forEachIndexed { index, (mode, label) ->
+                                SegmentedButton(
+                                    selected = Settings.themeMode == mode,
+                                    onClick = { Settings.updateThemeMode(mode) },
+                                    shape = SegmentedButtonDefaults.itemShape(index, 3),
+                                ) {
+                                    Text(label, fontSize = 12.sp, maxLines = 1)
+                                }
+                            }
+                    }
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            IosCard(radius = 16.dp, modifier = Modifier.fillMaxWidth()) {
                 Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("自动签到", fontSize = 16.sp)

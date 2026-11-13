@@ -418,10 +418,13 @@ object ReadingStats {
     }
 }
 
-/** App settings (mirror of the iOS SettingsView): auto check-in, reader mode. */
+/** Persistent app settings: appearance, auto check-in and reader mode. */
 object Settings {
+    private val themeModes = setOf("system", "light", "dark")
     private var prefs: SharedPreferences? = null
     var autoCheckIn by mutableStateOf(true)
+        private set
+    var themeMode by mutableStateOf("system")
         private set
     var readerMode by mutableStateOf("scroll") // "scroll" | "page"
         private set
@@ -433,11 +436,17 @@ object Settings {
         val p = context.getSharedPreferences("jm.settings", Context.MODE_PRIVATE)
         prefs = p
         autoCheckIn = p.getBoolean("autoCheckIn", true)
+        themeMode = p.getString("themeMode", "system")?.takeIf { it in themeModes } ?: "system"
         readerMode = p.getString("readerMode", "scroll") ?: "scroll"
         readerRtl = p.getBoolean("readerRtl", false)
     }
 
     fun updateAutoCheckIn(v: Boolean) { autoCheckIn = v; prefs?.edit()?.putBoolean("autoCheckIn", v)?.apply() }
+    fun updateThemeMode(v: String) {
+        if (v !in themeModes) return
+        themeMode = v
+        prefs?.edit()?.putString("themeMode", v)?.apply()
+    }
     fun updateReaderMode(v: String) { readerMode = v; prefs?.edit()?.putString("readerMode", v)?.apply() }
     fun updateReaderRtl(v: Boolean) { readerRtl = v; prefs?.edit()?.putBoolean("readerRtl", v)?.apply() }
 
