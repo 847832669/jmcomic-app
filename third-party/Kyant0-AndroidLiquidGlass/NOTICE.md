@@ -1,5 +1,7 @@
 # Kyant0 / AndroidLiquidGlass (Backdrop)
 
+Historical attribution: the current app renders glass with QmDeve/AndroidLiquidGlassView (`android/liquidglass`). The earlier Kyant0 AGSL and CPU renderers have been removed. This notice remains because the app's Compose backdrop recording and navigation layout were adapted during that earlier implementation. The following describes that original adaptation.
+
 Source: https://github.com/Kyant0/AndroidLiquidGlass
 
 Adapted revision: `eb4a0ea2e17542ea28c2e71088f7dd9acf77aad5`.
