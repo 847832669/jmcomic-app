@@ -35,14 +35,15 @@ JM Reader 的 Android 版本（Kotlin + Jetpack Compose），与 iOS 版同一�
 
 Android 界面的底栏、工具栏、卡片、搜索与输入框、筛选标签、主要按钮、弹窗和阅读器控制区使用统一玻璃材质。底栏可点击或横向拖动切换页面，选中胶囊以弹簧动画跟随；文字与漫画原图保持清晰。
 
-基于 [Kyant0/AndroidLiquidGlass](https://github.com/Kyant0/AndroidLiquidGlass) 的图层采样、圆角矩形 SDF 折射与色散着色器进行源码适配，保留现有 Compose 1.8 环境。来源版本与变更说明见 [第三方声明](../third-party/Kyant0-AndroidLiquidGlass/NOTICE.md)，许可证为 Apache-2.0。
+使用 [QmDeve/AndroidLiquidGlassView](https://github.com/QmDeve/AndroidLiquidGlassView) 的实际 `LiquidGlassView` 组件，由 `:liquidglass` 源码模块提供。原 Java 组件与 AGSL 着色器保留，构建适配 SDK 35 / Java 17。来源版本、MIT 许可证和兼容修正见 [组件库说明](liquidglass/NOTICE.md)。
 
-- Android 13 / API 33 及以上：GPU 模糊、AGSL 边缘折射与七采样色散。
-- Android 12 / API 31–32：GPU 模糊与反射高光。
-- Android 8–11 / API 26–30：限制分辨率的背景快照、CPU 模糊与 SDF 折射，色散采用三通道近似。
+- Android 13 / API 33 及以上：新库的 GPU 模糊、AGSL 边缘折射、色散与材质着色。
+- Android 8–12 / API 26–32：保留清晰、可操作的半透明表面；新库不支持这些系统的折射效果。
 
-卡片采样环境背景，浮动底栏采样页面内容；采样源与玻璃层分离，避免递归叠加。旧系统静止时降低快照频率，应用进入后台后停止采样。不同 Android 版本的效果与流畅度会有差异。
+通过 Compose / View 适配层调用组件库的 `bind()`。卡片采样环境背景，浮动底栏采样页面内容；采样源与玻璃层分离，避免递归叠加。弹窗使用屏幕坐标对齐背景，每个组件仅录制自身范围。原 Kyant0 AGSL 与 CPU 渲染器已移除；保留已有图层采样和导航布局的历史授权声明。
 
 调试构建附带离线视觉测试场景，可通过 `adb shell am start -n com.denia.jmreader/.GlassPreviewActivity` 启动；正式构建不包含此入口。
 
-2026-11-13：调试 APK 已安装到 BSN-AN00 真机（Android API 37，1280 × 2788）验证。四个底栏入口、横向拖动、设置卡片跳转、动态背景采样与玻璃弹窗通过；GPU AGSL 已启用。日间、夜间、跟随系统、手动覆盖系统与重启保留选择共六项外观检查通过。测试场景使用离线色块验证模糊、边缘折射和清晰前景；未覆盖账号登录、在线内容与完整阅读流程。
+测试设备：BSN-AN00 真机（Android API 37，1280 × 2788）。使用离线色块场景验证折射、模糊、动态采样与弹窗对齐，并检查底栏导航与日夜主题。账号登录、在线内容与完整阅读流程不属于此次材质替换验证范围。
+
+2026-11-13：`2.19-glass.2` / 15 调试构建成功并已覆盖安装到上述真机。四个底栏入口、横向拖动、设置导航、背景更新、弹窗开关和 QmDeve 着色器初始化检查通过；六项主题与重启保留检查全部通过。移动色块后，玻璃内部固定区域的 RGB 平均变化为 17.01 / 255，确认采样随背景更新。
