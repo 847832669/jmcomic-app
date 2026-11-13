@@ -52,7 +52,7 @@
 
 ### Android
 
-系统要求 Android 8.0（API 26）及以上。当前分支 APK 已完成本地构建和真机安装，尚未发布 GitHub Release；可按 [Android 构建说明](android/README.md#构建) 生成安装包，后续发布见 [本分支 Releases](https://github.com/847832669/jmcomic-app/releases)。
+系统要求 Android 8.0（API 26）及以上。在 [v2.19-glass.4 Release](https://github.com/847832669/jmcomic-app/releases/tag/v2.19-glass.4) 下载 `JMReader-Android-v2.19-glass.4.apk` 安装，附带 `SHA256SUMS.txt` 校验文件。安装包为已通过真机验证的调试签名版本，同签名安装可覆盖更新；也可按 [Android 构建说明](android/README.md#构建) 自行构建。
 
 上游原版 APK 可在 [上游 Releases](https://github.com/denia-dev/jmcomic-app/releases) 下载。当前分支已在雷电模拟器与 BSN-AN00 真机验证，具体设备和测试范围见 [Android 说明](android/README.md#验证记录)。
 
