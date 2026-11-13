@@ -4,6 +4,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
+import java.time.ZoneOffset
 
 class CommunityModelsTest {
     private fun response(count: Int, total: Int? = null): JSONObject = JSONObject().apply {
@@ -52,6 +53,62 @@ class CommunityModelsTest {
         assertEquals(1, page.comments.size)
         assertEquals("reader", page.comments.single().username)
         assertEquals("", page.comments.single().photo)
+    }
+
+    @Test fun groupsNestedRepliesAndKeepsOrphansVisible() {
+        val root = JmComment("1", "reader", "root", "", "")
+        val reply = JmComment("2", "reader", "reply", "", "", parentId = "1")
+        val nestedReply = JmComment("3", "reader", "nested", "", "", parentId = "2")
+        val orphan = JmComment("4", "reader", "orphan", "", "", parentId = "missing")
+        val threads = threadComments(listOf(root, reply, nestedReply, orphan))
+        assertEquals(listOf("1", "4"), threads.map { it.comment.id })
+        assertEquals("2", threads.first().replies.single().comment.id)
+        assertEquals("3", threads.first().replies.single().replies.single().comment.id)
+    }
+
+    @Test fun parsesParentCidWhenPresent() {
+        val row = response(1, 1).getJSONArray("list").getJSONObject(0).put("parent_CID", "42")
+        val page = JmCommentPage.parse(JSONObject().put("list", JSONArray().put(row)).put("total", 1), 1)
+        assertEquals("42", page.comments.single().parentId)
+    }
+
+    @Test fun cyclicParentReferencesDoNotDuplicateComments() {
+        val first = JmComment("1", "reader", "first", "", "", parentId = "2")
+        val second = JmComment("2", "reader", "second", "", "", parentId = "1")
+        val threads = threadComments(listOf(first, second))
+        assertEquals(1, threads.size)
+        assertEquals("2", threads.single().replies.single().comment.id)
+        assertTrue(threads.single().replies.single().replies.isEmpty())
+    }
+
+    @Test fun keywordFilterHidesMatchingReplyBranchesAndKeepsOtherComments() {
+        val root = JmComment("1", "reader", "<b>normal root</b>", "", "")
+        val spam = JmComment("2", "reader", "<p>BUY&#32;NOW</p>", "", "", parentId = "1")
+        val nested = JmComment("3", "reader", "reply to spam", "", "", parentId = "2")
+        val cleanReply = JmComment("4", "reader", "normal reply", "", "", parentId = "1")
+        val threads = filterCommentThreadsByKeywords(
+            threadComments(listOf(root, spam, nested, cleanReply)), listOf(" buy now "))
+
+        assertEquals(listOf("1"), threads.map { it.comment.id })
+        assertEquals(listOf("4"), threads.single().replies.map { it.comment.id })
+        assertEquals(listOf(root), filterCommentThreadsByKeywords(threadComments(listOf(root)), emptyList())
+            .map { it.comment })
+    }
+
+    @Test fun formatsAlbumUpdateTimestampsAndDates() {
+        assertEquals("2026-11-13", albumUpdateDate("1794534613", ZoneOffset.UTC))
+        assertEquals("2026-11-13", albumUpdateDate("1794534613000", ZoneOffset.UTC))
+        assertEquals("2026-11-13", albumUpdateDate("2026-11-13 09:50:13"))
+        assertNull(albumUpdateDate("null"))
+    }
+
+    @Test fun keywordFilterRemovesDeepMatchesAndMatchesRenderedInlineText() {
+        val root = JmComment("1", "reader", "root", "", "")
+        val reply = JmComment("2", "reader", "clean reply", "", "", parentId = "1")
+        val ad = JmComment("3", "reader", "点<b>击</b>&#x5E7F;告", "", "", parentId = "2")
+        val threads = filterCommentThreadsByKeywords(threadComments(listOf(root, reply, ad)), listOf("点击广告"))
+        assertTrue(threads.single().replies.single().replies.isEmpty())
+        assertTrue(filterCommentThreadsByKeywords(threadComments(listOf(ad)), listOf("点击广告")).isEmpty())
     }
 
     @Test(expected = IllegalStateException::class)
