@@ -4,7 +4,7 @@ JM Reader 的 Android 版本（Kotlin + Jetpack Compose），与 iOS 版使用�
 
 ## 安装
 
-系统要求 Android 8.0（API 26）及以上。当前分支 APK 已完成本地构建并覆盖安装到测试手机，尚未发布 GitHub Release；可按下方步骤构建，后续发布见 [本分支 Releases](https://github.com/847832669/jmcomic-app/releases)。
+系统要求 Android 8.0（API 26）及以上。在 [v2.19-glass.4 Release](https://github.com/847832669/jmcomic-app/releases/tag/v2.19-glass.4) 下载 `JMReader-Android-v2.19-glass.4.apk` 安装，附带 `SHA256SUMS.txt` 校验文件。该安装包为已覆盖安装到 BSN-AN00 真机验证的调试签名版本；也可按下方步骤自行构建。
 
 [上游 Releases](https://github.com/denia-dev/jmcomic-app/releases) 提供上游原版安装包；本分支的主题、QmDeve 材质和评论增强以本仓库源码为准。覆盖安装要求签名一致，本地构建的签名配置见 `app/build.gradle.kts`。
 
