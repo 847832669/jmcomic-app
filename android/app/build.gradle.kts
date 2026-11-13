@@ -12,8 +12,8 @@ android {
         applicationId = "com.denia.jmreader"
         minSdk = 26
         targetSdk = 34
-        versionCode = 16
-        versionName = "2.19-glass.3"
+        versionCode = 17
+        versionName = "2.19-glass.4"
     }
 
     // Persistent debug key (kept OUTSIDE the repo, in the local workspace) so
@@ -52,6 +52,7 @@ android {
         jvmTarget = "17"
     }
     buildFeatures {
+        buildConfig = true
         compose = true
     }
     packaging {
