@@ -1,11 +1,11 @@
 package com.denia.jmreader
 
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -34,12 +34,13 @@ class CommunityPreviewActivity : ComponentActivity() {
                             if (open) CommentsScreen(CommentsDest(albumId, "评论模块验证"), { open = false },
                                 isLoggedIn = !live && mode != "guest", onLogin = { open = false },
                                 source = if (live) JmCommunitySource else source)
-                            else Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+                            else Column(Modifier.fillMaxSize().padding(16.dp)) {
                                 Text("作品详情模块验证")
                                 AlbumDescription(if (mode == "empty") "" else
                                     "<p><b>作品描述</b>：中文 &amp; HTML 实体、换行与可选择文本。</p>" +
                                     (1..12).joinToString("") { "<p>描述第 $it 段：验证长内容展开与收起。</p>" })
-                                AlbumCommentsPreview(albumId, "12", source) { open = true }
+                                Spacer(Modifier.height(12.dp))
+                                Button(onClick = { open = true }) { Text("评论") }
                             }
                         }
                     }
@@ -52,11 +53,17 @@ class CommunityPreviewActivity : ComponentActivity() {
 private class FixtureCommunitySource(private val mode: String) : CommunitySource {
     private var failLoad = mode == "error"
     private var failSend = mode == "send-error"
+    private var failNextPage = mode == "page-error"
     private val posted = mutableListOf<String>()
     override suspend fun comments(albumId: String, page: Int, pageSize: Int): JmCommentPage {
+        Log.d("CommunityFixture", "Request page=$page mode=$mode")
         delay(200)
         if (failLoad) { failLoad = false; error("离线网络故障，请重试") }
-        val all = if (mode == "empty") posted else posted + (1..12).map { "测试评论 $it：<b>清晰文字</b> &amp; 中文换行<br>第二行" }
+        if (failNextPage && page == 2) { failNextPage = false; error("下一页加载失败，请重试") }
+        val all = if (mode == "empty") posted else posted + (1..30).map {
+            if ((mode == "filtered" && it <= 12) || mode == "all-filtered") "fixture_ad 广告评论 $it"
+            else "测试评论 $it：<b>清晰文字</b> &amp; 中文换行<br>第二行"
+        }
         return JmCommentPage.parse(JSONObject().put("total", all.size).put("list", JSONArray().apply {
             all.drop((page - 1) * 6).take(6).forEachIndexed { i, html ->
                 put(JSONObject().put("CID", "${(page - 1) * 6 + i}").put("username", "测试读者")
