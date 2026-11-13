@@ -12,8 +12,8 @@ android {
         applicationId = "com.denia.jmreader"
         minSdk = 26
         targetSdk = 34
-        versionCode = 14
-        versionName = "2.19"
+        versionCode = 15
+        versionName = "2.19-glass.2"
     }
 
     // Persistent debug key (kept OUTSIDE the repo, in the local workspace) so
@@ -66,14 +66,16 @@ dependencies {
     implementation(composeBom)
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.activity:activity-compose:1.9.2")
-    implementation("androidx.compose.ui:ui")
-    implementation("androidx.compose.ui:ui-graphics")
+    // Haze previously supplied Compose 1.8 transitively. Keep that version explicit.
+    implementation("androidx.compose.ui:ui:1.8.0")
+    implementation("androidx.compose.ui:ui-graphics:1.8.0")
+    implementation("androidx.compose.foundation:foundation:1.8.0")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.4")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.4")
     implementation("io.coil-kt:coil-compose:2.7.0")
-    implementation("dev.chrisbanes.haze:haze:1.6.10")
+    implementation(project(":liquidglass"))
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 }
