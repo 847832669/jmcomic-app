@@ -12,8 +12,8 @@ android {
         applicationId = "com.denia.jmreader"
         minSdk = 26
         targetSdk = 34
-        versionCode = 15
-        versionName = "2.19-glass.2"
+        versionCode = 16
+        versionName = "2.19-glass.3"
     }
 
     // Persistent debug key (kept OUTSIDE the repo, in the local workspace) so
@@ -62,6 +62,8 @@ android {
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
     val composeBom = platform("androidx.compose:compose-bom:2024.09.00")
     implementation(composeBom)
     implementation("androidx.core:core-ktx:1.13.1")
