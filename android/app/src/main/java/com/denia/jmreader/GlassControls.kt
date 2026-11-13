@@ -53,6 +53,8 @@ fun GlassTextField(
     placeholder: @Composable (() -> Unit)? = null,
     trailingIcon: @Composable (() -> Unit)? = null,
     singleLine: Boolean = false,
+    maxLines: Int = if (singleLine) 1 else Int.MAX_VALUE,
+    enabled: Boolean = true,
     shape: Shape = RoundedCornerShape(16.dp),
     colors: TextFieldColors = OutlinedTextFieldDefaults.colors(),
     visualTransformation: VisualTransformation = VisualTransformation.None,
@@ -60,7 +62,8 @@ fun GlassTextField(
     GlassSurface(modifier, shape = shape, tintStrength = 0.45f) {
         OutlinedTextField(value, onValueChange, Modifier.fillMaxWidth(),
             label = label, placeholder = placeholder, trailingIcon = trailingIcon,
-            singleLine = singleLine, shape = shape, visualTransformation = visualTransformation,
+            singleLine = singleLine, maxLines = maxLines, enabled = enabled,
+            shape = shape, visualTransformation = visualTransformation,
             colors = colors.copy(focusedContainerColor = Color.Transparent,
                 unfocusedContainerColor = Color.Transparent))
     }

@@ -634,6 +634,7 @@ fun DetailScreen(dest: DetailDest, router: Router, account: AccountStore, librar
                             }
                         }
                     }
+                    AlbumDescription(d.optString("description").takeUnless { it == "null" } ?: "")
                     Spacer(Modifier.height(16.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         GlassButton(onClick = { if (chapters.isNotEmpty()) router.push(ReaderDest(chapters.first().first, name, dest.id)) },
@@ -701,6 +702,9 @@ fun DetailScreen(dest: DetailDest, router: Router, account: AccountStore, librar
                             confirmButton = {},
                             dismissButton = { TextButton(onClick = { showFolderPick = false }) { Text("取消") } },
                         )
+                    }
+                    AlbumCommentsPreview(dest.id, d.optString("comment_total")) {
+                        router.push(CommentsDest(dest.id, name))
                     }
                     Spacer(Modifier.height(18.dp))
                     Text("章节", fontWeight = FontWeight.Bold, fontSize = 15.sp)

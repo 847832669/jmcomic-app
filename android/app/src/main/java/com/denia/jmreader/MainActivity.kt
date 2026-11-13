@@ -109,6 +109,11 @@ fun JmApp(externalPdf: android.net.Uri? = null, onExternalPdfDone: () -> Unit = 
                                 } else {
                                     when (top) {
                                         is DetailDest -> DetailScreen(top, router, account, library)
+                                        is CommentsDest -> CommentsScreen(top, { router.pop() }, account.isLoggedIn,
+                                            onLogin = {
+                                                router.stack.clear()
+                                                scope.launch { pagerState.animateScrollToPage(2) }
+                                            })
                                         is ReaderDest -> ReaderScreen(top, router)
                                         is AuthorDest -> AuthorScreen(top, router)
                                         is CategoryDest -> CategoryPage(top, router)

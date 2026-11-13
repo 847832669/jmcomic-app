@@ -34,6 +34,11 @@ object JmApi {
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
+    private val commentClient = client.newBuilder()
+        .retryOnConnectionFailure(false)
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .build()
     private val bootstrapMutex = Mutex()
     @Volatile private var bootstrapped = false
 
@@ -142,7 +147,8 @@ object JmApi {
                 form?.forEach { (k, v) -> fb.add(k, v) }
                 builder.post(fb.build())
             }
-            client.newCall(builder.build()).execute().use { resp ->
+            val requestClient = if (method == "POST" && path == "comment") commentClient else client
+            requestClient.newCall(builder.build()).execute().use { resp ->
                 val body = resp.body?.string() ?: throw ApiException("空响应")
                 val env = JSONObject(body)
                 val code = env.optInt("code", -1)
@@ -215,6 +221,25 @@ object JmApi {
 
     suspend fun album(id: String): JSONObject = call("album", mapOf("id" to id))
     suspend fun chapter(id: String): JSONObject = call("chapter", mapOf("id" to id))
+
+    suspend fun comments(id: String, page: Int, pageSize: Int = 10): JmCommentPage =
+        JmCommentPage.parse(call("forum", mapOf("mode" to "manhua", "aid" to id,
+            "page" to page.toString())), page, pageSize)
+
+    suspend fun sendComment(id: String, content: String): String {
+        require(content.isNotBlank()) { "请输入评论内容" }
+        check(!authToken.isNullOrBlank() || !authCookie.isNullOrBlank()) { "请先登录后再发表评论" }
+        bootstrap()
+        // A POST may already have reached the server when its response is lost.
+        // Send once, keeping the draft on failure, rather than posting duplicates.
+        val data = request("POST", "comment", emptyMap(),
+            mapOf("aid" to id, "comment" to content.trim(), "status" to "undefined"), skipBootstrap = true)
+        return JmCommentPage.submissionMessage(data)
+    }
+
+    fun avatarUrl(photo: String): String? = photo.takeIf {
+        it.isNotBlank() && it != "null" && it.matches(Regex("[A-Za-z0-9_.-]+"))
+    }?.let { "https://$imgHost/media/users/$it" }
 
     suspend fun login(username: String, password: String): JSONObject =
         callForm("login", mapOf("username" to username, "password" to password))

@@ -106,6 +106,7 @@ fun IosCard(modifier: Modifier = Modifier, radius: androidx.compose.ui.unit.Dp =
 // ---------- navigation ----------
 sealed interface Dest
 data class DetailDest(val id: String) : Dest
+data class CommentsDest(val id: String, val title: String) : Dest
 data class ReaderDest(val chapterId: String, val albumTitle: String, val albumId: String = "") : Dest
 data class AuthorDest(val name: String) : Dest
 data class CategoryDest(val slug: String, val name: String) : Dest
