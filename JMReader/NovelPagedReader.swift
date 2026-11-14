@@ -27,6 +27,59 @@ enum NovelImageCache {
     }
 }
 
+/// Live page position for the scrolling reader (build 69: the
+/// bottom control bar was replaced by a small page indicator).
+/// Pages are viewport-height slices of the (realized) content, so
+/// totals grow as more of the book is laid out — they are live
+/// estimates in scroll mode, exact in paged mode. Published values
+/// change only when the page number does, keeping scrolling smooth.
+final class NovelScrollMetrics: ObservableObject {
+    var offset: CGFloat = 0
+    var contentHeight: CGFloat = 0
+    @Published var page = 1
+    @Published var total = 1
+
+    func update(viewport: CGFloat) {
+        guard viewport > 0, contentHeight > 0 else { return }
+        let t = max(1, Int(ceil(contentHeight / viewport)))
+        let p = min(max(Int(offset / viewport) + 1, 1), t)
+        if t != total { total = t }
+        if p != page { page = p }
+    }
+}
+
+struct NovelScrollOffsetKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+struct NovelContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+/// The small live page indicator shown instead of a control bar.
+struct NovelPageBadge: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.caption2)
+            .foregroundColor(.secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(.ultraThinMaterial, in: Capsule())
+    }
+}
+
+struct NovelScrollIndicator: View {
+    @ObservedObject var metrics: NovelScrollMetrics
+
+    var body: some View {
+        NovelPageBadge(text: "\(metrics.page) / \(metrics.total)")
+    }
+}
+
 /// An illustration block in the scrolling reader: loads its
 /// downscaled image off the main thread, aspect-fit.
 struct NovelBlockImage: View {

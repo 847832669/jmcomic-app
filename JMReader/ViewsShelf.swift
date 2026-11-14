@@ -655,6 +655,7 @@ struct NovelReaderView: View {
     @State private var scrollChapter = 0
     @State private var jumpChapter: Int? = nil
     @State private var jumpNonce = 0
+    @StateObject private var metrics = NovelScrollMetrics()
     @State private var showToc = false
     @AppStorage("jm.novelFontSize") private var fontSize: Double = 18
     @AppStorage("jm.novelMode") private var mode: String = "scroll"
@@ -684,6 +685,8 @@ struct NovelReaderView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
+                    Button { showToc = true } label: { Label("目录", systemImage: "list.bullet") }
+                    Divider()
                     Picker("阅读模式", selection: $mode) {
                         Text("上下滚动").tag("scroll")
                         Text("左右翻页").tag("paged")
@@ -718,10 +721,15 @@ struct NovelReaderView: View {
                 }
                 VStack {
                     Spacer()
-                    controlBar
+                    HStack {
+                        Spacer()
+                        if !pages.isEmpty {
+                            NovelPageBadge(text: "\(current + 1) / \(pages.count)")
+                        }
+                    }
                 }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 8)
+                .padding(.trailing, 14)
+                .padding(.bottom, 12)
             }
             .onAppear {
                 if chapters.isEmpty { chapters = shelf.novelChapters(book) }
@@ -737,32 +745,52 @@ struct NovelReaderView: View {
     // MARK: scroll mode (continuous, whole book)
 
     private var scrollBody: some View {
-        ScrollViewReader { proxy in
-            ZStack(alignment: .bottom) {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(chapters.indices, id: \.self) { ci in
-                            chapterSection(ci).id(ci)
+        GeometryReader { geo in
+            ScrollViewReader { proxy in
+                ZStack(alignment: .bottomTrailing) {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(chapters.indices, id: \.self) { ci in
+                                chapterSection(ci).id(ci)
+                            }
+                            Color.clear.frame(height: 48)
                         }
-                        Color.clear.frame(height: 76)
+                        .padding(.horizontal, 20)
+                        .padding(.top, 10)
+                        .background {
+                            GeometryReader { g in
+                                Color.clear
+                                    .preference(key: NovelScrollOffsetKey.self,
+                                                value: -g.frame(in: .named("novelScroll")).minY)
+                                    .preference(key: NovelContentHeightKey.self,
+                                                value: g.frame(in: .named("novelScroll")).height)
+                            }
+                        }
                     }
-                    .padding(.horizontal, 20)
-                    .padding(.top, 10)
+                    .coordinateSpace(name: "novelScroll")
+                    NovelScrollIndicator(metrics: metrics)
+                        .padding(.trailing, 14)
+                        .padding(.bottom, 12)
                 }
-                controlBar
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 8)
-            }
-            .onAppear {
-                if chapters.isEmpty { chapters = shelf.novelChapters(book) }
-                scrollChapter = min(shelf.lastChapter(book), max(0, chapters.count - 1))
-                let target = scrollChapter
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                    proxy.scrollTo(target, anchor: .top)
+                .onAppear {
+                    if chapters.isEmpty { chapters = shelf.novelChapters(book) }
+                    scrollChapter = min(shelf.lastChapter(book), max(0, chapters.count - 1))
+                    let target = scrollChapter
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                        proxy.scrollTo(target, anchor: .top)
+                    }
                 }
-            }
-            .onChange(of: jumpNonce) { _ in
-                if let t = jumpChapter { proxy.scrollTo(t, anchor: .top) }
+                .onChange(of: jumpNonce) { _ in
+                    if let t = jumpChapter { proxy.scrollTo(t, anchor: .top) }
+                }
+                .onPreferenceChange(NovelScrollOffsetKey.self) { v in
+                    metrics.offset = v
+                    metrics.update(viewport: geo.size.height)
+                }
+                .onPreferenceChange(NovelContentHeightKey.self) { v in
+                    metrics.contentHeight = v
+                    metrics.update(viewport: geo.size.height)
+                }
             }
         }
     }
@@ -805,26 +833,6 @@ struct NovelReaderView: View {
     }
 
     // MARK: shared chrome
-
-    private var controlBar: some View {
-        HStack(spacing: 12) {
-            Button("上一章") { goChapter(curChapter - 1) }
-                .disabled(curChapter <= 0)
-            Button("目录") { showToc = true }
-            Spacer()
-            Text(indicatorText)
-                .font(.caption)
-                .foregroundColor(.secondary)
-            Spacer()
-            Button("下一章") { goChapter(curChapter + 1) }
-                .disabled(curChapter >= chapters.count - 1)
-        }
-        .font(.subheadline)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(.ultraThinMaterial, in: Capsule())
-        .shadow(color: .black.opacity(0.08), radius: 8, y: 2)
-    }
 
     private var tocSheet: some View {
         NavigationStack {
