@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 import ImageIO
 
@@ -98,6 +99,43 @@ private struct TargetLayoutIfAvailable: ViewModifier {
     }
 }
 
+/// UIKit document picker (delegate-based), presented as a sheet.
+/// Replaces SwiftUI's `.fileImporter`, whose completion never fired on
+/// the owner's device (builds 61/62/64: picked a file, tapped Open,
+/// zero reaction — no status line, no result alert, no log entry, and
+/// the LocalBooks folder stayed empty, so the chain died before
+/// `importFiles` was ever called). `asCopy: true` makes the system hand
+/// us a plain copy inside the app container, so the import chain no
+/// longer depends on security-scoped URLs at all.
+private struct DocumentPickerView: UIViewControllerRepresentable {
+    var onPick: ([URL]) -> Void
+    var onCancel: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [UTType.data], asCopy: true)
+        picker.allowsMultipleSelection = true
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ controller: UIDocumentPickerViewController, context: Context) {}
+
+    final class Coordinator: NSObject, UIDocumentPickerDelegate {
+        let parent: DocumentPickerView
+        init(parent: DocumentPickerView) { self.parent = parent }
+
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            parent.onPick(urls)
+        }
+
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            parent.onCancel()
+        }
+    }
+}
+
 struct BookshelfView: View {
     @EnvironmentObject var shelf: LocalBookStore
     @EnvironmentObject var downloads: DownloadManager
@@ -159,6 +197,26 @@ struct BookshelfView: View {
         }
     }
 
+    /// Runs the import for files chosen in the document picker. The
+    /// result note is set after a short delay on purpose: presenting
+    /// the alert in the same moment the picker sheet dismisses can get
+    /// the presentation dropped on iOS 27.
+    private func handlePickedFiles(_ urls: [URL]) {
+        guard !urls.isEmpty else {
+            shelf.noteImport("选择器返回：空结果")
+            return
+        }
+        shelf.noteImport("选择器返回成功：\(urls.count) 个文件")
+        Task {
+            let r = await shelf.importFiles(urls)
+            var parts: [String] = []
+            if !r.added.isEmpty { parts.append("已导入 \(r.added.count) 本") }
+            if !r.failed.isEmpty { parts.append("失败：\n\(r.failed.joined(separator: "\n"))") }
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            note = parts.isEmpty ? "没有导入任何文件" : parts.joined(separator: "\n")
+        }
+    }
+
     /// 最近阅读 = the online reading history (LibraryStore.progress),
     /// most recent first. This is what the owner asked for on the shelf:
     /// it must show up from his actual reading, not only after imports.
@@ -206,33 +264,11 @@ struct BookshelfView: View {
                     }
                 }
             }
-            .fileImporter(isPresented: $showImporter,
-                          allowedContentTypes: [UTType.data],
-                          allowsMultipleSelection: true) { result in
-                // The result note is set after a short delay on purpose:
-                // presenting the alert in the same moment the picker sheet
-                // dismisses can get the presentation dropped on iOS 27,
-                // which read as "picked a file, nothing happened at all".
-                switch result {
-                case .success(let urls) where !urls.isEmpty:
-                    shelf.noteImport("选择器返回成功：\(urls.count) 个文件")
-                    Task {
-                        let r = await shelf.importFiles(urls)
-                        var parts: [String] = []
-                        if !r.added.isEmpty { parts.append("已导入 \(r.added.count) 本") }
-                        if !r.failed.isEmpty { parts.append("失败：\n\(r.failed.joined(separator: "\n"))") }
-                        try? await Task.sleep(nanoseconds: 350_000_000)
-                        note = parts.isEmpty ? "没有导入任何文件" : parts.joined(separator: "\n")
-                    }
-                case .failure(let error):
-                    shelf.noteImport("选择器返回失败：\(error.localizedDescription)")
-                    Task {
-                        try? await Task.sleep(nanoseconds: 350_000_000)
-                        note = "选择器没能读取文件：\(error.localizedDescription)"
-                    }
-                default:
-                    shelf.noteImport("选择器返回：空结果")
-                    break
+            .sheet(isPresented: $showImporter) {
+                DocumentPickerView { urls in
+                    handlePickedFiles(urls)
+                } onCancel: {
+                    shelf.noteImport("选择器已取消")
                 }
             }
             .alert("导入结果", isPresented: Binding(get: { note != nil }, set: { if !$0 { note = nil } })) {
