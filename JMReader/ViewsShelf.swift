@@ -745,52 +745,39 @@ struct NovelReaderView: View {
     // MARK: scroll mode (continuous, whole book)
 
     private var scrollBody: some View {
-        GeometryReader { geo in
-            ScrollViewReader { proxy in
-                ZStack(alignment: .bottomTrailing) {
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 0) {
-                            ForEach(chapters.indices, id: \.self) { ci in
-                                chapterSection(ci).id(ci)
-                            }
-                            Color.clear.frame(height: 48)
+        ScrollViewReader { proxy in
+            ZStack(alignment: .bottomTrailing) {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(chapters.indices, id: \.self) { ci in
+                            chapterSection(ci).id(ci)
                         }
-                        .padding(.horizontal, 20)
-                        .padding(.top, 10)
-                        .background {
-                            GeometryReader { g in
-                                Color.clear
-                                    .preference(key: NovelScrollOffsetKey.self,
-                                                value: -g.frame(in: .named("novelScroll")).minY)
-                                    .preference(key: NovelContentHeightKey.self,
-                                                value: g.frame(in: .named("novelScroll")).height)
-                            }
+                        Color.clear.frame(height: 48)
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.top, 10)
+                    .background {
+                        ScrollViewTracker { off, total, vp in
+                            metrics.offset = off
+                            metrics.contentHeight = total
+                            metrics.update(viewport: vp)
                         }
                     }
-                    .coordinateSpace(name: "novelScroll")
-                    NovelScrollIndicator(metrics: metrics)
-                        .padding(.trailing, 14)
-                        .padding(.bottom, 12)
                 }
-                .onAppear {
-                    if chapters.isEmpty { chapters = shelf.novelChapters(book) }
-                    scrollChapter = min(shelf.lastChapter(book), max(0, chapters.count - 1))
-                    let target = scrollChapter
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                        proxy.scrollTo(target, anchor: .top)
-                    }
+                NovelScrollIndicator(metrics: metrics)
+                    .padding(.trailing, 14)
+                    .padding(.bottom, 12)
+            }
+            .onAppear {
+                if chapters.isEmpty { chapters = shelf.novelChapters(book) }
+                scrollChapter = min(shelf.lastChapter(book), max(0, chapters.count - 1))
+                let target = scrollChapter
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                    proxy.scrollTo(target, anchor: .top)
                 }
-                .onChange(of: jumpNonce) { _ in
-                    if let t = jumpChapter { proxy.scrollTo(t, anchor: .top) }
-                }
-                .onPreferenceChange(NovelScrollOffsetKey.self) { v in
-                    metrics.offset = v
-                    metrics.update(viewport: geo.size.height)
-                }
-                .onPreferenceChange(NovelContentHeightKey.self) { v in
-                    metrics.contentHeight = v
-                    metrics.update(viewport: geo.size.height)
-                }
+            }
+            .onChange(of: jumpNonce) { _ in
+                if let t = jumpChapter { proxy.scrollTo(t, anchor: .top) }
             }
         }
     }

@@ -48,14 +48,61 @@ final class NovelScrollMetrics: ObservableObject {
     }
 }
 
-struct NovelScrollOffsetKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
-}
+// Direct UIScrollView tracking (KVO on contentOffset/contentSize).
+// The PreferenceKey route never delivered values out of the lazy stack.
+struct ScrollViewTracker: UIViewRepresentable {
+    var onChange: (_ offset: CGFloat, _ contentHeight: CGFloat, _ viewport: CGFloat) -> Void
 
-struct NovelContentHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+    func makeUIView(context: Context) -> UIView {
+        let v = UIView()
+        v.isUserInteractionEnabled = false
+        DispatchQueue.main.async { context.coordinator.attach(from: v) }
+        return v
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.onChange = onChange
+        if context.coordinator.scrollView == nil {
+            DispatchQueue.main.async { context.coordinator.attach(from: uiView) }
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(onChange: onChange) }
+
+    final class Coordinator {
+        var onChange: (_ offset: CGFloat, _ contentHeight: CGFloat, _ viewport: CGFloat) -> Void
+        weak var scrollView: UIScrollView?
+        private var offsetObs: NSKeyValueObservation?
+        private var sizeObs: NSKeyValueObservation?
+
+        init(onChange: @escaping (_ offset: CGFloat, _ contentHeight: CGFloat, _ viewport: CGFloat) -> Void) {
+            self.onChange = onChange
+        }
+
+        func attach(from view: UIView) {
+            guard scrollView == nil else { return }
+            var p = view.superview
+            while let cur = p {
+                if let sv = cur as? UIScrollView { bind(sv); return }
+                p = cur.superview
+            }
+        }
+
+        private func bind(_ sv: UIScrollView) {
+            scrollView = sv
+            offsetObs = sv.observe(\.contentOffset, options: [.new]) { [weak self] sv, _ in
+                self?.report(sv)
+            }
+            sizeObs = sv.observe(\.contentSize, options: [.new]) { [weak self] sv, _ in
+                self?.report(sv)
+            }
+            report(sv)
+        }
+
+        private func report(_ sv: UIScrollView) {
+            onChange(sv.contentOffset.y, sv.contentSize.height, sv.bounds.height)
+        }
+    }
 }
 
 /// The small live page indicator shown instead of a control bar.
