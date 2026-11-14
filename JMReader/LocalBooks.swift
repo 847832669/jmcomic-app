@@ -547,19 +547,78 @@ final class LocalBookStore: ObservableObject {
         for tag in xmlTags(opf, name: "itemref") {
             if let ref = xmlAttrValue(tag, "idref"), xmlAttrValue(tag, "linear") != "no" { spine.append(ref) }
         }
-        // Chapters from spine XHTML
-        var chapters: [NovelChapter] = []
+        // Chapter titles come from the navigation document (EPUB 3
+        // nav, else the EPUB 2 NCX). Per-file <title> elements cannot
+        // be used: Sigil-style EPUBs repeat the book title in every
+        // file, so the first import showed a TOC of 27 identical rows.
+        // Keys are archive paths with the fragment stripped.
+        var navTitles: [String: String] = [:]
+        if let navItem = manifest.values.first(where: { $0.props.split(separator: " ").contains("nav") }) {
+            let navPath = joinPath(opfDir, navItem.href)
+            if let entry = zip.entry(named: navPath),
+               let raw = try? zip.data(for: entry),
+               let navHtml = String(data: raw, encoding: .utf8) {
+                let navDir = (navPath as NSString).deletingLastPathComponent
+                for link in epubNavLinks(navHtml) {
+                    let key = joinPath(navDir, link.href)
+                    if navTitles[key] == nil { navTitles[key] = link.label }
+                }
+            }
+        }
+        if navTitles.isEmpty,
+           let ncxItem = manifest.values.first(where: { $0.type.contains("ncx") }) {
+            let ncxPath = joinPath(opfDir, ncxItem.href)
+            if let entry = zip.entry(named: ncxPath),
+               let raw = try? zip.data(for: entry),
+               let ncx = String(data: raw, encoding: .utf8) {
+                let ncxDir = (ncxPath as NSString).deletingLastPathComponent
+                for link in epubNcxLinks(ncx) {
+                    let key = joinPath(ncxDir, link.href)
+                    if navTitles[key] == nil { navTitles[key] = link.label }
+                }
+            }
+        }
+        // Raw spine pages with the running head removed: these books
+        // repeat the book title as the first line of every page (and it
+        // is the ONLY text of image-only front-matter pages).
+        var rawPages: [(href: String, text: String)] = []
         for ref in spine {
             guard let item = manifest[ref], item.type.contains("xhtml"),
                   let entry = zip.entry(named: joinPath(opfDir, item.href)),
                   let raw = try? zip.data(for: entry),
                   let html = String(data: raw, encoding: .utf8)
             else { continue }
-            let text = stripHTML(html)
-            guard text.count >= 10 else { continue }
-            var chTitle = xmlElementText(html, tag: "title") ?? ""
+            var text = stripHTML(html)
+            let fileTitle = xmlElementText(html, tag: "title") ?? ""
+            let lines = text.components(separatedBy: "\n")
+            if let first = lines.first {
+                let head = first.trimmingCharacters(in: .whitespaces)
+                if !head.isEmpty, head == fileTitle || head == title {
+                    text = lines.dropFirst().joined(separator: "\n")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+            }
+            rawPages.append((joinPath(opfDir, item.href), text))
+        }
+        // Chapters: image-only pages drop out anywhere in the book;
+        // short front-matter notices ahead of the first substantial
+        // chapter (copyright/caution pages) drop too.
+        let firstBig = rawPages.firstIndex { $0.text.count >= 1000 }
+        var chapters: [NovelChapter] = []
+        for (i, page) in rawPages.enumerated() {
+            if page.text.count < 10 { continue }
+            if let fb = firstBig, i < fb, page.text.count < 200 { continue }
+            var chTitle = navTitles[page.href] ?? ""
+            var body = page.text
+            let firstLine = body.components(separatedBy: "\n").first?
+                .trimmingCharacters(in: .whitespaces) ?? ""
+            if isChapterHeading(firstLine) {
+                if chTitle.isEmpty { chTitle = firstLine }
+                body = body.components(separatedBy: "\n").dropFirst()
+                    .joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            }
             if chTitle.isEmpty || chTitle == title { chTitle = "第\(chapters.count + 1)章" }
-            chapters.append(NovelChapter(title: chTitle, text: text))
+            chapters.append(NovelChapter(title: chTitle, text: body))
         }
         guard !chapters.isEmpty else { throw ZipError.entryNotFound }
         try writeChapters(chapters, dir: dir)
@@ -714,12 +773,63 @@ final class LocalBookStore: ObservableObject {
     }
 
     static func xmlElementText(_ xml: String, tag: String) -> String? {
-        // Handles namespaced tags like <dc:title>…</dc:title> via suffix match.
-        let pattern = "(?s)<[^>]*" + NSRegularExpression.escapedPattern(for: tag) + ">(.*?)</[^>]*" + NSRegularExpression.escapedPattern(for: tag) + ">"
+        // Handles namespaced tags like <dc:title>…</dc:title> via suffix
+        // match, and attributes on the open tag (<dc:title id="title"> —
+        // without tolerating them, Sigil EPUBs lose their dc:title and
+        // the book falls back to its filename).
+        let pattern = "(?s)<[^>]*" + NSRegularExpression.escapedPattern(for: tag) + "[^>]*>(.*?)</[^>]*" + NSRegularExpression.escapedPattern(for: tag) + "\\s*>"
         guard let re = try? NSRegularExpression(pattern: pattern),
               let m = re.firstMatch(in: xml, range: NSRange(xml.startIndex..<xml.endIndex, in: xml)),
               m.numberOfRanges > 1, let r = Range(m.range(at: 1), in: xml) else { return nil }
         return stripHTML(String(xml[r])).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Links of an EPUB 3 nav document: (href without fragment, label),
+    /// in document order.
+    static func epubNavLinks(_ html: String) -> [(href: String, label: String)] {
+        var out: [(href: String, label: String)] = []
+        let pattern = "(?is)<a\\s[^>]*href=\"([^\"]+)\"[^>]*>(.*?)</a>"
+        guard let re = try? NSRegularExpression(pattern: pattern) else { return [] }
+        for m in re.matches(in: html, range: NSRange(html.startIndex..<html.endIndex, in: html)) {
+            guard m.numberOfRanges > 2,
+                  let hr = Range(m.range(at: 1), in: html),
+                  let lr = Range(m.range(at: 2), in: html) else { continue }
+            let rawHref = String(html[hr])
+            let href = rawHref.split(separator: "#").first.map(String.init) ?? rawHref
+            let label = stripHTML(String(html[lr])).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !label.isEmpty { out.append((href, label)) }
+        }
+        return out
+    }
+
+    /// Links of an EPUB 2 NCX: (src without fragment, label), in
+    /// document order.
+    static func epubNcxLinks(_ ncx: String) -> [(href: String, label: String)] {
+        var out: [(href: String, label: String)] = []
+        let pattern = "(?is)<text>(.*?)</text>\\s*</navLabel>\\s*<content[^>]*?src=\"([^\"]+)\""
+        guard let re = try? NSRegularExpression(pattern: pattern) else { return [] }
+        for m in re.matches(in: ncx, range: NSRange(ncx.startIndex..<ncx.endIndex, in: ncx)) {
+            guard m.numberOfRanges > 2,
+                  let lr = Range(m.range(at: 1), in: ncx),
+                  let hr = Range(m.range(at: 2), in: ncx) else { continue }
+            let rawHref = String(ncx[hr])
+            let href = rawHref.split(separator: "#").first.map(String.init) ?? rawHref
+            let label = stripHTML(String(ncx[lr])).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !label.isEmpty { out.append((href, label)) }
+        }
+        return out
+    }
+
+    /// True when a line reads as a chapter heading （序章 / 第N话 …),
+    /// in Chinese or Japanese forms.
+    static func isChapterHeading(_ line: String) -> Bool {
+        let s = line.trimmingCharacters(in: .whitespaces)
+        guard !s.isEmpty, s.count <= 80 else { return false }
+        let patterns = [
+            "^(序章|終章|终章|尾声|番外編|番外|後記|后记|あとがき|プロローグ|エピローグ)",
+            "^第[0-9０-９零一二三四五六七八九十百千]{1,6}[话話章回節节卷]",
+        ]
+        return patterns.contains { s.range(of: $0, options: .regularExpression) != nil }
     }
 
     static func xmlMetaCoverId(_ opf: String) -> String? {
