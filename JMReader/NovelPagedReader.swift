@@ -36,7 +36,7 @@ enum NovelPager {
         let bodyFont = UIFont.systemFont(ofSize: fontSize)
         let titleStyle = NSMutableParagraphStyle()
         titleStyle.lineSpacing = 4
-        titleStyle.paragraphSpacingAfter = fontSize * 0.9
+        titleStyle.paragraphSpacing = fontSize * 0.9
         out.append(NSAttributedString(string: chapter.title + "\n", attributes: [
             .font: UIFont.boldSystemFont(ofSize: fontSize + 5),
             .foregroundColor: UIColor.label,
@@ -58,7 +58,7 @@ enum NovelPager {
                 let style = NSMutableParagraphStyle()
                 style.alignment = .center
                 style.paragraphSpacingBefore = fontSize * 0.4
-                style.paragraphSpacingAfter = fontSize * 0.4
+                style.paragraphSpacing = fontSize * 0.4
                 out.append(NSAttributedString(string: "\n", attributes: [
                     .font: bodyFont, .paragraphStyle: style,
                 ]))
@@ -80,7 +80,7 @@ enum NovelPager {
                 }
                 let style = NSMutableParagraphStyle()
                 style.lineSpacing = fontSize * 0.45
-                style.paragraphSpacingAfter = fontSize * 0.3
+                style.paragraphSpacing = fontSize * 0.3
                 style.firstLineHeadIndent = fontSize * 2
                 out.append(NSAttributedString(string: p + "\n", attributes: [
                     .font: bodyFont,
