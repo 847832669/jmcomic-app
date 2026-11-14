@@ -1,5 +1,59 @@
 import SwiftUI
 import UIKit
+import ImageIO
+
+/// Downscaled image loading for illustrations. The EPUB originals
+/// are multi-megapixel files; decoding them at full size on every
+/// page turn is what made the paged reader stutter (build 67
+/// feedback). Thumbnails are decoded once via ImageIO and cached.
+enum NovelImageCache {
+    private static let cache = NSCache<NSString, UIImage>()
+
+    static func image(at url: URL, maxPixel: CGFloat) -> UIImage? {
+        let key = (url.path + "#\(Int(maxPixel))") as NSString
+        if let hit = cache.object(forKey: key) { return hit }
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        let opts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixel,
+            kCGImageSourceShouldCacheImmediately: true,
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary)
+        else { return nil }
+        let img = UIImage(cgImage: cg)
+        cache.setObject(img, forKey: key)
+        return img
+    }
+}
+
+/// An illustration block in the scrolling reader: loads its
+/// downscaled image off the main thread, aspect-fit.
+struct NovelBlockImage: View {
+    let url: URL
+    @State private var image: UIImage? = nil
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                Rectangle()
+                    .fill(Color.secondary.opacity(0.08))
+                    .aspectRatio(1.4, contentMode: .fit)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .task {
+            let u = url
+            image = await Task.detached(priority: .userInitiated) {
+                NovelImageCache.image(at: u, maxPixel: 1242)
+            }.value
+        }
+    }
+}
 
 // MARK: - paged novel layout (TextKit)
 //
@@ -45,10 +99,11 @@ enum NovelPager {
         for block in chapter.contentBlocks {
             if block.kind == "image", let rel = block.file {
                 let url = bookDir.appendingPathComponent(rel)
-                guard let img = UIImage(contentsOfFile: url.path) else { continue }
+                guard let img = NovelImageCache.image(at: url, maxPixel: imageMaxWidth * 2)
+                else { continue }
                 let att = NSTextAttachment()
                 att.image = img
-                var w = imageMaxWidth
+                var w = min(imageMaxWidth, img.size.width)
                 var h = img.size.width > 0 ? img.size.height * w / img.size.width : 0
                 if h > imageMaxHeight {
                     h = imageMaxHeight

@@ -638,28 +638,71 @@ private struct LocalPageView: View {
     }
 }
 
-// MARK: - novel reader (paged, build 67)
+// MARK: - novel reader (scroll / paged modes, build 68)
 
 struct NovelReaderView: View {
     let book: LocalBook
     @EnvironmentObject var shelf: LocalBookStore
     @State private var chapters: [NovelChapter] = []
+    // paged mode
     @State private var layouts: [NovelChapterLayout] = []
     @State private var pages: [(chapter: Int, page: Int)] = []
     @State private var chapterStarts: [Int] = []
     @State private var current = 0
     @State private var generation = 0
-    @State private var showToc = false
     @State private var rebuildTask: Task<Void, Never>?
+    // scroll mode
+    @State private var scrollChapter = 0
+    @State private var jumpChapter: Int? = nil
+    @State private var jumpNonce = 0
+    @State private var showToc = false
     @AppStorage("jm.novelFontSize") private var fontSize: Double = 18
+    @AppStorage("jm.novelMode") private var mode: String = "scroll"
 
-    private var curChapter: Int { pages.indices.contains(current) ? pages[current].chapter : 0 }
+    private var isPaged: Bool { mode == "paged" }
+    private var curChapter: Int {
+        isPaged ? (pages.indices.contains(current) ? pages[current].chapter : 0) : scrollChapter
+    }
     private var curPageInChapter: Int { pages.indices.contains(current) ? pages[current].page : 0 }
     private var curChapterPages: Int {
         layouts.indices.contains(curChapter) ? layouts[curChapter].ranges.count : 0
     }
+    private var indicatorText: String {
+        if isPaged {
+            return "第 \(curChapter + 1) 章 · \(curPageInChapter + 1)/\(max(1, curChapterPages)) 页"
+        }
+        return "第 \(curChapter + 1) / \(max(1, chapters.count)) 章"
+    }
 
     var body: some View {
+        Group {
+            if isPaged { pagedBody } else { scrollBody }
+        }
+        .navigationTitle(book.title)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .tabBar)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Picker("阅读模式", selection: $mode) {
+                        Text("上下滚动").tag("scroll")
+                        Text("左右翻页").tag("paged")
+                    }
+                    Divider()
+                    Button { fontSize = max(14, fontSize - 1) } label: { Label("减小字号", systemImage: "textformat.size.smaller") }
+                    Button { fontSize = min(26, fontSize + 1) } label: { Label("增大字号", systemImage: "textformat.size.larger") }
+                } label: {
+                    Image(systemName: "textformat.size")
+                }
+            }
+        }
+        .sheet(isPresented: $showToc) { tocSheet }
+        .onDisappear { shelf.noteReaderClosed() }
+    }
+
+    // MARK: paged mode (UIPageViewController, build 67)
+
+    private var pagedBody: some View {
         GeometryReader { geo in
             let pageSize = CGSize(width: max(80, geo.size.width - 40),
                                   height: max(80, geo.size.height - 84))
@@ -686,24 +729,82 @@ struct NovelReaderView: View {
             }
             .onChange(of: geo.size) { _ in scheduleRebuild(pageSize: pageSize) }
             .onChange(of: fontSize) { _ in scheduleRebuild(pageSize: pageSize) }
+            .onChange(of: chapters.count) { _ in scheduleRebuild(pageSize: pageSize) }
         }
-        .navigationTitle(book.title)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar(.hidden, for: .tabBar)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Button { fontSize = max(14, fontSize - 1) } label: { Label("减小字号", systemImage: "textformat.size.smaller") }
-                    Button { fontSize = min(26, fontSize + 1) } label: { Label("增大字号", systemImage: "textformat.size.larger") }
-                } label: {
-                    Image(systemName: "textformat.size")
+        .onChange(of: current) { _ in saveProgress() }
+    }
+
+    // MARK: scroll mode (continuous, whole book)
+
+    private var scrollBody: some View {
+        ScrollViewReader { proxy in
+            ZStack(alignment: .bottom) {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(chapters.indices, id: \.self) { ci in
+                            chapterSection(ci).id(ci)
+                        }
+                        Color.clear.frame(height: 76)
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.top, 10)
+                }
+                controlBar
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
+            }
+            .onAppear {
+                if chapters.isEmpty { chapters = shelf.novelChapters(book) }
+                scrollChapter = min(shelf.lastChapter(book), max(0, chapters.count - 1))
+                let target = scrollChapter
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                    proxy.scrollTo(target, anchor: .top)
+                }
+            }
+            .onChange(of: jumpNonce) { _ in
+                if let t = jumpChapter { proxy.scrollTo(t, anchor: .top) }
+            }
+        }
+    }
+
+    private func chapterSection(_ ci: Int) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(chapters[ci].title)
+                .font(.system(size: fontSize + 5, weight: .bold))
+                .padding(.top, ci == 0 ? 4 : 26)
+            ForEach(chapters[ci].contentBlocks.indices, id: \.self) { bi in
+                blockView(chapters[ci].contentBlocks[bi])
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onAppear {
+            scrollChapter = ci
+            shelf.saveProgress(bookId: book.id, chapter: ci)
+        }
+    }
+
+    @ViewBuilder
+    private func blockView(_ block: NovelBlock) -> some View {
+        if block.kind == "image", let rel = block.file {
+            NovelBlockImage(url: shelf.dir(of: book).appendingPathComponent(rel))
+                .padding(.vertical, 6)
+        } else if let text = block.text {
+            VStack(alignment: .leading, spacing: fontSize * 0.3) {
+                ForEach(Array(text.components(separatedBy: "\n").enumerated()), id: \.offset) { _, line in
+                    let p = line.trimmingCharacters(in: .whitespaces)
+                    if p.isEmpty {
+                        Spacer().frame(height: fontSize * 0.4)
+                    } else {
+                        Text("　　" + p)
+                            .font(.system(size: fontSize))
+                            .lineSpacing(fontSize * 0.45)
+                    }
                 }
             }
         }
-        .sheet(isPresented: $showToc) { tocSheet }
-        .onChange(of: current) { _ in saveProgress() }
-        .onDisappear { shelf.noteReaderClosed() }
     }
+
+    // MARK: shared chrome
 
     private var controlBar: some View {
         HStack(spacing: 12) {
@@ -711,7 +812,7 @@ struct NovelReaderView: View {
                 .disabled(curChapter <= 0)
             Button("目录") { showToc = true }
             Spacer()
-            Text("第 \(curChapter + 1) 章 · \(curPageInChapter + 1)/\(max(1, curChapterPages)) 页")
+            Text(indicatorText)
                 .font(.caption)
                 .foregroundColor(.secondary)
             Spacer()
@@ -729,7 +830,7 @@ struct NovelReaderView: View {
         NavigationStack {
             List(Array(chapters.enumerated()), id: \.offset) { i, ch in
                 Button {
-                    if chapterStarts.indices.contains(i) { current = chapterStarts[i] }
+                    goChapter(i)
                     showToc = false
                 } label: {
                     HStack {
@@ -747,8 +848,14 @@ struct NovelReaderView: View {
     }
 
     private func goChapter(_ ch: Int) {
-        guard chapterStarts.indices.contains(ch) else { return }
-        current = chapterStarts[ch]
+        guard ch >= 0, ch < chapters.count else { return }
+        if isPaged {
+            guard chapterStarts.indices.contains(ch) else { return }
+            current = chapterStarts[ch]
+        } else {
+            jumpChapter = ch
+            jumpNonce += 1
+        }
     }
 
     private func saveProgress() {
@@ -758,8 +865,9 @@ struct NovelReaderView: View {
     }
 
     /// (Re)paginates the whole book for the current page size and
-    /// font size. The reading position is preserved by character
-    /// offset; the first build restores the saved chapter/page.
+    /// font size (paged mode). The reading position is preserved by
+    /// character offset; the first build restores the saved
+    /// chapter/page.
     private func scheduleRebuild(pageSize: CGSize) {
         let chs = chapters
         guard !chs.isEmpty else { return }
