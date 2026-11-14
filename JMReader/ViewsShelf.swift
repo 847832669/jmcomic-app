@@ -657,6 +657,7 @@ struct NovelReaderView: View {
     @State private var jumpNonce = 0
     @StateObject private var metrics = NovelScrollMetrics()
     @State private var showToc = false
+    @State private var chromeHidden = false
     @AppStorage("jm.novelFontSize") private var fontSize: Double = 18
     @AppStorage("jm.novelMode") private var mode: String = "scroll"
 
@@ -682,6 +683,8 @@ struct NovelReaderView: View {
         .navigationTitle(book.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar)
+        .toolbar(chromeHidden ? .hidden : .visible, for: .navigationBar)
+        .statusBarHidden(chromeHidden)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
@@ -703,6 +706,10 @@ struct NovelReaderView: View {
         .onDisappear { shelf.noteReaderClosed() }
     }
 
+    private func toggleChrome() {
+        withAnimation(.easeInOut(duration: 0.22)) { chromeHidden.toggle() }
+    }
+
     // MARK: paged mode (UIPageViewController, build 67)
 
     private var pagedBody: some View {
@@ -715,7 +722,8 @@ struct NovelReaderView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     NovelPageHost(layouts: layouts, pages: pages,
-                                  generation: generation, current: $current)
+                                  generation: generation, current: $current,
+                                  onCenterTap: { toggleChrome() })
                         .frame(width: pageSize.width, height: pageSize.height)
                         .padding(.top, 10)
                 }
@@ -768,6 +776,7 @@ struct NovelReaderView: View {
                     .padding(.trailing, 14)
                     .padding(.bottom, 12)
             }
+            .onTapGesture { toggleChrome() }
             .onAppear {
                 if chapters.isEmpty { chapters = shelf.novelChapters(book) }
                 scrollChapter = min(shelf.lastChapter(book), max(0, chapters.count - 1))

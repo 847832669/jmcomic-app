@@ -350,6 +350,7 @@ struct NovelPageHost: UIViewControllerRepresentable {
     let pages: [(chapter: Int, page: Int)]
     let generation: Int
     @Binding var current: Int
+    var onCenterTap: () -> Void = {}
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -431,6 +432,7 @@ struct NovelPageHost: UIViewControllerRepresentable {
             let w = view.bounds.width
             if x < w * 0.32 { step(-1) }
             else if x > w * 0.68 { step(1) }
+            else { parent?.onCenterTap() }
         }
 
         private func step(_ delta: Int) {
