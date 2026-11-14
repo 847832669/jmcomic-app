@@ -244,7 +244,48 @@ struct LocalBook: Identifiable, Codable, Hashable {
     var sizeBytes: Int = 0
 }
 
-struct NovelChapter: Codable { var title: String; var text: String }
+/// One piece of a novel chapter: a run of text, or an illustration
+/// stored as a file inside the book directory (EPUB imports, build 67+).
+struct NovelBlock: Codable {
+    var kind: String            // "text" | "image"
+    var text: String? = nil
+    var file: String? = nil     // image: path relative to the book dir
+}
+
+struct NovelChapter: Codable {
+    var title: String
+    /// Legacy whole-chapter text (imports before build 67, and TXT).
+    var text: String = ""
+    /// Ordered text/image blocks (EPUB imports from build 67 on).
+    var blocks: [NovelBlock]? = nil
+
+    var contentBlocks: [NovelBlock] {
+        if let blocks, !blocks.isEmpty { return blocks }
+        return text.isEmpty ? [] : [NovelBlock(kind: "text", text: text)]
+    }
+
+    init(title: String, text: String = "", blocks: [NovelBlock]? = nil) {
+        self.title = title
+        self.text = text
+        self.blocks = blocks
+    }
+
+    private enum CodingKeys: String, CodingKey { case title, text, blocks }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        title = try c.decode(String.self, forKey: .title)
+        text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
+        blocks = try c.decodeIfPresent([NovelBlock].self, forKey: .blocks)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(title, forKey: .title)
+        try c.encode(text, forKey: .text)
+        try c.encodeIfPresent(blocks, forKey: .blocks)
+    }
+}
 
 final class LocalBookStore: ObservableObject {
     @Published private(set) var books: [LocalBook] = []
@@ -307,10 +348,13 @@ final class LocalBookStore: ObservableObject {
     }
     func hasProgress(_ book: LocalBook) -> Bool { (progress[book.id]?["ts"] ?? 0) > 0 }
 
-    func saveProgress(bookId: String, page: Int? = nil, chapter: Int? = nil) {
+    func lastNovelPage(_ book: LocalBook) -> Int { progress[book.id]?["npage"] ?? 0 }
+
+    func saveProgress(bookId: String, page: Int? = nil, chapter: Int? = nil, novelPage: Int? = nil) {
         var entry = progress[bookId] ?? [:]
         if let page { entry["page"] = page }
         if let chapter { entry["chapter"] = chapter }
+        if let novelPage { entry["npage"] = novelPage }
         entry["ts"] = Int(Date().timeIntervalSince1970)
         progress[bookId] = entry
         if let data = try? JSONEncoder().encode(progress) {
@@ -578,47 +622,134 @@ final class LocalBookStore: ObservableObject {
                 }
             }
         }
-        // Raw spine pages with the running head removed: these books
-        // repeat the book title as the first line of every page (and it
-        // is the ONLY text of image-only front-matter pages).
-        var rawPages: [(href: String, text: String)] = []
+        // Spine pages as ordered segments (text runs and image
+        // references in document order, build 67: illustrations are
+        // kept, not stripped). A page's plain text — the concatenation
+        // of its text segments — drives the length tests below.
+        struct EpubPage {
+            var href: String
+            var segs: [(kind: String, value: String)] = []  // image value = archive path
+            var text: String = ""
+        }
+        var imageFiles: [String: String] = [:]   // archive path -> stored path rel. to book dir
+        var imageSeq = 0
+        func storeImage(_ archivePath: String) -> String? {
+            if let kept = imageFiles[archivePath] { return kept }
+            let ext = (archivePath as NSString).pathExtension.lowercased()
+            guard ["jpg", "jpeg", "png", "webp", "gif"].contains(ext),
+                  let entry = zip.entry(named: archivePath),
+                  let raw = try? zip.data(for: entry) else { return nil }
+            let imagesDir = dir.appendingPathComponent("images", isDirectory: true)
+            try? FileManager.default.createDirectory(at: imagesDir, withIntermediateDirectories: true)
+            let name = String(format: "img-%04d.%@", imageSeq, ext)
+            imageSeq += 1
+            do { try raw.write(to: imagesDir.appendingPathComponent(name), options: .atomic) }
+            catch { return nil }
+            let rel = "images/" + name
+            imageFiles[archivePath] = rel
+            return rel
+        }
+        var pages: [EpubPage] = []
         for ref in spine {
             guard let item = manifest[ref], item.type.contains("xhtml"),
                   let entry = zip.entry(named: joinPath(opfDir, item.href)),
                   let raw = try? zip.data(for: entry),
                   let html = String(data: raw, encoding: .utf8)
             else { continue }
-            var text = stripHTML(html)
-            let fileTitle = xmlElementText(html, tag: "title") ?? ""
-            let lines = text.components(separatedBy: "\n")
-            if let first = lines.first {
-                let head = first.trimmingCharacters(in: .whitespaces)
-                if !head.isEmpty, head == fileTitle || head == title {
-                    text = lines.dropFirst().joined(separator: "\n")
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
+            let pagePath = joinPath(opfDir, item.href)
+            let pageDir = (pagePath as NSString).deletingLastPathComponent
+            var page = EpubPage(href: pagePath)
+            for seg in epubSegments(html) {
+                if seg.kind == "image" {
+                    page.segs.append(("image", joinPath(pageDir, seg.value)))
+                } else {
+                    page.segs.append(seg)
                 }
             }
-            rawPages.append((joinPath(opfDir, item.href), text))
+            // Running head: the first line of the first text segment
+            // repeats the book title (it comes from the file's <title>
+            // and is the ONLY text of image-only front-matter pages).
+            let fileTitle = xmlElementText(html, tag: "title") ?? ""
+            if let ti = page.segs.firstIndex(where: { $0.kind == "text" }) {
+                let lines = page.segs[ti].value.components(separatedBy: "\n")
+                if let first = lines.first {
+                    let head = first.trimmingCharacters(in: .whitespaces)
+                    if !head.isEmpty, head == fileTitle || head == title {
+                        page.segs[ti] = ("text", lines.dropFirst().joined(separator: "\n")
+                            .trimmingCharacters(in: .whitespacesAndNewlines))
+                    }
+                }
+            }
+            page.text = page.segs.filter { $0.kind == "text" }.map(\.value)
+                .filter { !$0.isEmpty }.joined(separator: "\n")
+            pages.append(page)
         }
-        // Chapters: image-only pages drop out anywhere in the book;
-        // short front-matter notices ahead of the first substantial
-        // chapter (copyright/caution pages) drop too.
-        let firstBig = rawPages.firstIndex { $0.text.count >= 1000 }
-        var chapters: [NovelChapter] = []
-        for (i, page) in rawPages.enumerated() {
+        // Kept chapters: image-only pages drop out anywhere; short
+        // front-matter notices ahead of the first substantial chapter
+        // (copyright/caution pages) drop too.
+        let firstBig = pages.firstIndex { $0.text.count >= 1000 }
+        var keptIdx: [Int] = []
+        for (i, page) in pages.enumerated() {
             if page.text.count < 10 { continue }
             if let fb = firstBig, i < fb, page.text.count < 200 { continue }
-            var chTitle = navTitles[page.href] ?? ""
-            var body = page.text
-            let firstLine = body.components(separatedBy: "\n").first?
-                .trimmingCharacters(in: .whitespaces) ?? ""
-            if isChapterHeading(firstLine) {
-                if chTitle.isEmpty { chTitle = firstLine }
-                body = body.components(separatedBy: "\n").dropFirst()
-                    .joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            keptIdx.append(i)
+        }
+        guard let firstKept = keptIdx.first, let lastKept = keptIdx.last
+        else { throw ZipError.entryNotFound }
+        var chapters: [NovelChapter] = []
+        var frontImages: [NovelBlock] = []
+        for (i, page) in pages.enumerated() {
+            if keptIdx.contains(i) {
+                var blocks: [NovelBlock] = frontImages
+                frontImages = []
+                for seg in page.segs {
+                    if seg.kind == "image" {
+                        if let rel = storeImage(seg.value) {
+                            blocks.append(NovelBlock(kind: "image", file: rel))
+                        }
+                    } else if !seg.value.isEmpty {
+                        blocks.append(NovelBlock(kind: "text", text: seg.value))
+                    }
+                }
+                // Title: nav label, else a heading-like first line,
+                // else 第N章. A heading-like first line leaves the body.
+                var chTitle = navTitles[page.href] ?? ""
+                if let bi = blocks.firstIndex(where: { $0.kind == "text" }) {
+                    let firstLine = (blocks[bi].text ?? "").components(separatedBy: "\n").first?
+                        .trimmingCharacters(in: .whitespaces) ?? ""
+                    if isChapterHeading(firstLine) {
+                        if chTitle.isEmpty { chTitle = firstLine }
+                        let rest = (blocks[bi].text ?? "").components(separatedBy: "\n").dropFirst()
+                            .joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+                        blocks[bi] = NovelBlock(kind: "text", text: rest)
+                    }
+                }
+                if chTitle.isEmpty || chTitle == title { chTitle = "第\(chapters.count + 1)章" }
+                chapters.append(NovelChapter(title: chTitle, blocks: blocks))
+            } else if i < firstKept {
+                // Front matter: its illustrations open the book (cover
+                // art, color pages, title page) — except the publisher's
+                // own TOC page image, which the app replaces.
+                if navTitles[page.href] != "目录" {
+                    for seg in page.segs where seg.kind == "image" {
+                        if let rel = storeImage(seg.value) {
+                            frontImages.append(NovelBlock(kind: "image", file: rel))
+                        }
+                    }
+                }
+            } else if i < lastKept, !chapters.isEmpty {
+                // An image-only page between chapters: its
+                // illustrations close out the previous chapter.
+                for seg in page.segs where seg.kind == "image" {
+                    if let rel = storeImage(seg.value) {
+                        var last = chapters[chapters.count - 1]
+                        last.blocks = (last.blocks ?? []) + [NovelBlock(kind: "image", file: rel)]
+                        chapters[chapters.count - 1] = last
+                    }
+                }
             }
-            if chTitle.isEmpty || chTitle == title { chTitle = "第\(chapters.count + 1)章" }
-            chapters.append(NovelChapter(title: chTitle, text: body))
+            // Pages after the last chapter (colophon, publisher ads,
+            // blank pages) contribute nothing.
         }
         guard !chapters.isEmpty else { throw ZipError.entryNotFound }
         try writeChapters(chapters, dir: dir)
@@ -782,6 +913,36 @@ final class LocalBookStore: ObservableObject {
               let m = re.firstMatch(in: xml, range: NSRange(xml.startIndex..<xml.endIndex, in: xml)),
               m.numberOfRanges > 1, let r = Range(m.range(at: 1), in: xml) else { return nil }
         return stripHTML(String(xml[r])).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Splits an XHTML page into ordered segments: ("text", stripped
+    /// text) and ("image", raw href), in document order. Handles both
+    /// <img src="…"> and SVG <image href="…"> / xlink:href forms.
+    static func epubSegments(_ html: String) -> [(kind: String, value: String)] {
+        var out: [(kind: String, value: String)] = []
+        let pattern = "(?is)<img[^>]*?\\bsrc=\"([^\"]+)\"[^>]*>|<image[^>]*?(?:xlink:href|href)=\"([^\"]+)\"[^>]*>"
+        guard let re = try? NSRegularExpression(pattern: pattern) else {
+            let t = stripHTML(html)
+            return t.isEmpty ? [] : [("text", t)]
+        }
+        var pos = html.startIndex
+        for m in re.matches(in: html, range: NSRange(html.startIndex..<html.endIndex, in: html)) {
+            guard let whole = Range(m.range, in: html) else { continue }
+            if whole.lowerBound > pos {
+                let t = stripHTML(String(html[pos..<whole.lowerBound]))
+                if !t.isEmpty { out.append(("text", t)) }
+            }
+            var href: String? = nil
+            if m.numberOfRanges > 1, let r = Range(m.range(at: 1), in: html) { href = String(html[r]) }
+            if href == nil, m.numberOfRanges > 2, let r = Range(m.range(at: 2), in: html) { href = String(html[r]) }
+            if let href { out.append(("image", href)) }
+            pos = whole.upperBound
+        }
+        if pos < html.endIndex {
+            let t = stripHTML(String(html[pos...]))
+            if !t.isEmpty { out.append(("text", t)) }
+        }
+        return out
     }
 
     /// Links of an EPUB 3 nav document: (href without fragment, label),

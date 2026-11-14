@@ -638,51 +638,58 @@ private struct LocalPageView: View {
     }
 }
 
-// MARK: - novel reader (TXT / EPUB chapters as plain text)
+// MARK: - novel reader (paged, build 67)
 
 struct NovelReaderView: View {
     let book: LocalBook
     @EnvironmentObject var shelf: LocalBookStore
     @State private var chapters: [NovelChapter] = []
-    @State private var idx = 0
+    @State private var layouts: [NovelChapterLayout] = []
+    @State private var pages: [(chapter: Int, page: Int)] = []
+    @State private var chapterStarts: [Int] = []
+    @State private var current = 0
+    @State private var generation = 0
     @State private var showToc = false
+    @State private var rebuildTask: Task<Void, Never>?
     @AppStorage("jm.novelFontSize") private var fontSize: Double = 18
 
+    private var curChapter: Int { pages.indices.contains(current) ? pages[current].chapter : 0 }
+    private var curPageInChapter: Int { pages.indices.contains(current) ? pages[current].page : 0 }
+    private var curChapterPages: Int {
+        layouts.indices.contains(curChapter) ? layouts[curChapter].ranges.count : 0
+    }
+
     var body: some View {
-        Group {
-            if chapters.isEmpty {
-                ProgressView("加载中…")
-            } else {
-                let ch = chapters[min(idx, chapters.count - 1)]
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        Text(ch.title).font(.title3).fontWeight(.bold)
-                        Text(ch.text)
-                            .font(.system(size: fontSize))
-                            .lineSpacing(7)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 18).padding(.vertical, 16)
+        GeometryReader { geo in
+            let pageSize = CGSize(width: max(80, geo.size.width - 40),
+                                  height: max(80, geo.size.height - 84))
+            ZStack(alignment: .top) {
+                if layouts.isEmpty {
+                    ProgressView("加载中…")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    NovelPageHost(layouts: layouts, pages: pages,
+                                  generation: generation, current: $current)
+                        .frame(width: pageSize.width, height: pageSize.height)
+                        .padding(.top, 10)
                 }
-                .id(idx)
-                .safeAreaInset(edge: .bottom) {
-                    HStack(spacing: 10) {
-                        Button("上一章") { idx = max(0, idx - 1) }
-                            .disabled(idx <= 0)
-                        Spacer()
-                        Button("目录") { showToc = true }
-                        Spacer()
-                        Button("下一章") { idx = min(chapters.count - 1, idx + 1) }
-                            .disabled(idx >= chapters.count - 1)
-                    }
-                    .font(.subheadline)
-                    .padding(.horizontal, 18).padding(.vertical, 10)
-                    .background(.ultraThinMaterial)
+                VStack {
+                    Spacer()
+                    controlBar
                 }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
             }
+            .onAppear {
+                if chapters.isEmpty { chapters = shelf.novelChapters(book) }
+                scheduleRebuild(pageSize: pageSize)
+            }
+            .onChange(of: geo.size) { _ in scheduleRebuild(pageSize: pageSize) }
+            .onChange(of: fontSize) { _ in scheduleRebuild(pageSize: pageSize) }
         }
         .navigationTitle(book.title)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .tabBar)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
@@ -693,34 +700,105 @@ struct NovelReaderView: View {
                 }
             }
         }
-        .sheet(isPresented: $showToc) {
-            NavigationStack {
-                List(Array(chapters.enumerated()), id: \.offset) { i, ch in
-                    Button {
-                        idx = i
-                        showToc = false
-                    } label: {
-                        HStack {
-                            Text(ch.title).lineLimit(1)
-                            Spacer()
-                            if i == idx { Image(systemName: "checkmark").foregroundColor(accentPink) }
-                        }
-                    }
-                    .foregroundColor(.primary)
-                }
-                .navigationTitle("目录")
-                .navigationBarTitleDisplayMode(.inline)
-            }
-            .presentationDetents([.medium, .large])
-        }
-        .task {
-            if chapters.isEmpty {
-                let loaded = shelf.novelChapters(book)
-                chapters = loaded
-                idx = min(shelf.lastChapter(book), max(0, loaded.count - 1))
-            }
-        }
-        .onChange(of: idx) { new in shelf.saveProgress(bookId: book.id, chapter: new) }
+        .sheet(isPresented: $showToc) { tocSheet }
+        .onChange(of: current) { _ in saveProgress() }
         .onDisappear { shelf.noteReaderClosed() }
+    }
+
+    private var controlBar: some View {
+        HStack(spacing: 12) {
+            Button("上一章") { goChapter(curChapter - 1) }
+                .disabled(curChapter <= 0)
+            Button("目录") { showToc = true }
+            Spacer()
+            Text("第 \(curChapter + 1) 章 · \(curPageInChapter + 1)/\(max(1, curChapterPages)) 页")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            Spacer()
+            Button("下一章") { goChapter(curChapter + 1) }
+                .disabled(curChapter >= chapters.count - 1)
+        }
+        .font(.subheadline)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial, in: Capsule())
+        .shadow(color: .black.opacity(0.08), radius: 8, y: 2)
+    }
+
+    private var tocSheet: some View {
+        NavigationStack {
+            List(Array(chapters.enumerated()), id: \.offset) { i, ch in
+                Button {
+                    if chapterStarts.indices.contains(i) { current = chapterStarts[i] }
+                    showToc = false
+                } label: {
+                    HStack {
+                        Text(ch.title).lineLimit(1)
+                        Spacer()
+                        if i == curChapter { Image(systemName: "checkmark").foregroundColor(accentPink) }
+                    }
+                }
+                .foregroundColor(.primary)
+            }
+            .navigationTitle("目录")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private func goChapter(_ ch: Int) {
+        guard chapterStarts.indices.contains(ch) else { return }
+        current = chapterStarts[ch]
+    }
+
+    private func saveProgress() {
+        guard pages.indices.contains(current) else { return }
+        shelf.saveProgress(bookId: book.id, chapter: pages[current].chapter,
+                           novelPage: pages[current].page)
+    }
+
+    /// (Re)paginates the whole book for the current page size and
+    /// font size. The reading position is preserved by character
+    /// offset; the first build restores the saved chapter/page.
+    private func scheduleRebuild(pageSize: CGSize) {
+        let chs = chapters
+        guard !chs.isEmpty else { return }
+        let initial = layouts.isEmpty
+        var targetChapter = shelf.lastChapter(book)
+        var targetOffset: Int? = nil
+        var targetPage = shelf.lastNovelPage(book)
+        if !initial, pages.indices.contains(current) {
+            targetChapter = pages[current].chapter
+            let lay = layouts[targetChapter]
+            let pic = pages[current].page
+            if lay.ranges.indices.contains(pic) { targetOffset = lay.ranges[pic].location }
+        }
+        let dir = shelf.dir(of: book)
+        let fs = CGFloat(fontSize)
+        rebuildTask?.cancel()
+        rebuildTask = Task {
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            if Task.isCancelled { return }
+            let built = await Task.detached(priority: .userInitiated) {
+                NovelPager.buildAll(chapters: chs, bookDir: dir, fontSize: fs, pageSize: pageSize)
+            }.value
+            if Task.isCancelled { return }
+            layouts = built.layouts
+            pages = built.pages
+            chapterStarts = built.chapterStarts
+            let ch = min(max(targetChapter, 0), max(0, built.layouts.count - 1))
+            var flat = built.chapterStarts.indices.contains(ch) ? built.chapterStarts[ch] : 0
+            if built.layouts.indices.contains(ch) {
+                let ranges = built.layouts[ch].ranges
+                if let off = targetOffset,
+                   let pi = ranges.firstIndex(where: { off < $0.location + $0.length }) {
+                    flat += pi
+                } else if !ranges.isEmpty {
+                    flat += min(targetPage, ranges.count - 1)
+                }
+            }
+            current = flat
+            generation += 1
+        }
     }
 }
