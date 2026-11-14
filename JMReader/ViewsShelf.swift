@@ -147,6 +147,9 @@ struct BookshelfView: View {
     @State private var showImporter = false
     @State private var note: String?
     @State private var pendingDelete: LocalBook?
+    @State private var selecting = false
+    @State private var selection: Set<String> = []
+    @State private var showBatchConfirm = false
 
     private let cols = Array(repeating: GridItem(.flexible(), spacing: 12), count: 3)
 
@@ -195,6 +198,52 @@ struct BookshelfView: View {
         case .download(let r): return r.date
         case .local(let b): return shelf.lastActivity(b)
         }
+    }
+
+    private func toggleSelection(_ item: ShelfItem) {
+        if selection.contains(item.id) { selection.remove(item.id) }
+        else { selection.insert(item.id) }
+    }
+
+    private var batchConfirmText: String {
+        let sel = allItems.filter { selection.contains($0.id) }
+        let locals = sel.filter { if case .local = $0 { return true } else { return false } }.count
+        let dls = sel.count - locals
+        if locals > 0 && dls > 0 {
+            return "包含 \(locals) 本导入书（文件删除后无法恢复）和 \(dls) 本下载（可重新下载）。"
+        } else if locals > 0 {
+            return "\(locals) 本导入书的文件将被删除，无法恢复。"
+        }
+        return "\(dls) 本下载将被删除，可重新下载。"
+    }
+
+    private func performBatchDelete() {
+        for item in allItems where selection.contains(item.id) {
+            switch item {
+            case .download(let r): downloads.store.delete(r)
+            case .local(let b): shelf.delete(b)
+            }
+        }
+        selection.removeAll()
+        selecting = false
+    }
+
+    private var batchBar: some View {
+        HStack(spacing: 14) {
+            Button("全选") { selection = Set(allItems.map(\.id)) }
+            Spacer()
+            Text("已选 \(selection.count) 本")
+                .font(.subheadline).foregroundColor(.secondary)
+            Spacer()
+            Button(role: .destructive) { showBatchConfirm = true } label: {
+                Text("删除").fontWeight(.semibold)
+            }
+            .disabled(selection.isEmpty)
+        }
+        .padding(.horizontal, 20).padding(.vertical, 12)
+        .glassSurface(Capsule())
+        .padding(.horizontal, 16).padding(.bottom, 10)
+        .shadow(color: .black.opacity(0.15), radius: 8, y: 3)
     }
 
     /// Runs the import for files chosen in the document picker. The
@@ -248,7 +297,20 @@ struct BookshelfView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button { showImporter = true } label: { Label("导入", systemImage: "plus") }
+                    if selecting {
+                        Button("完成") {
+                            selecting = false
+                            selection.removeAll()
+                        }
+                    } else {
+                        HStack(spacing: 14) {
+                            Button { selecting = true } label: {
+                                Label("多选", systemImage: "checkmark.circle")
+                            }
+                            .disabled(allItems.isEmpty)
+                            Button { showImporter = true } label: { Label("导入", systemImage: "plus") }
+                        }
+                    }
                 }
             }
             .overlay {
@@ -264,6 +326,18 @@ struct BookshelfView: View {
                     }
                 }
             }
+            .overlay(alignment: .bottom) {
+                if selecting { batchBar }
+            }
+            .alert("删除所选书籍？", isPresented: $showBatchConfirm) {
+                Button("取消", role: .cancel) { }
+                Button("删除", role: .destructive) { performBatchDelete() }
+            } message: {
+                Text(batchConfirmText)
+            }
+            .onChange(of: segment) { _ in selection.removeAll() }
+            .onChange(of: typeFilter) { _ in selection.removeAll() }
+            .onChange(of: dlCategory) { _ in selection.removeAll() }
             .sheet(isPresented: $showImporter) {
                 DocumentPickerView { urls in
                     handlePickedFiles(urls)
@@ -400,20 +474,43 @@ struct BookshelfView: View {
                     }
                     LazyVGrid(columns: cols, spacing: 18) {
                         ForEach(items) { item in
-                            NavigationLink { destination(for: item) } label: {
-                                cell(item)
+                            Group {
+                                if selecting {
+                                    Button { toggleSelection(item) } label: {
+                                        cell(item)
+                                    }
+                                    .buttonStyle(.plain)
+                                } else {
+                                    NavigationLink { destination(for: item) } label: {
+                                        cell(item)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .contextMenu {
+                                        switch item {
+                                        case .download(let r):
+                                            Button(role: .destructive) {
+                                                downloads.store.delete(r)
+                                            } label: { Label("删除下载", systemImage: "trash") }
+                                        case .local(let b):
+                                            Button(role: .destructive) {
+                                                pendingDelete = b
+                                            } label: { Label("删除文件", systemImage: "trash") }
+                                        }
+                                    }
+                                }
                             }
-                            .buttonStyle(.plain)
-                            .contextMenu {
-                                switch item {
-                                case .download(let r):
-                                    Button(role: .destructive) {
-                                        downloads.store.delete(r)
-                                    } label: { Label("删除下载", systemImage: "trash") }
-                                case .local(let b):
-                                    Button(role: .destructive) {
-                                        pendingDelete = b
-                                    } label: { Label("删除文件", systemImage: "trash") }
+                            .overlay(alignment: .topTrailing) {
+                                if selecting {
+                                    ZStack {
+                                        Circle().fill(Color.white).frame(width: 22, height: 22)
+                                        Image(systemName: selection.contains(item.id)
+                                              ? "checkmark.circle.fill" : "circle")
+                                            .font(.system(size: 22))
+                                            .foregroundColor(selection.contains(item.id)
+                                                             ? accentPink : .gray)
+                                    }
+                                    .padding(6)
+                                    .shadow(color: .black.opacity(0.25), radius: 3, y: 1)
                                 }
                             }
                         }
