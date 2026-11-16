@@ -23,6 +23,7 @@ import androidx.compose.animation.core.spring
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -47,6 +48,7 @@ fun LiquidGlassBottomBar(selectedPage: Int, pagePosition: Float, backdrop: Glass
     val density = LocalDensity.current
     val insetPx = with(density) { 4.dp.toPx() }
     val maxShiftPx = with(density) { 6.dp.toPx() }
+    val frostedBackdrop = rememberGlassBackdrop()
     var touching by remember { mutableStateOf(false) }
     var shiftTarget by remember { mutableFloatStateOf(0f) }
     var dragging by remember { mutableStateOf<Float?>(null) }
@@ -68,7 +70,7 @@ fun LiquidGlassBottomBar(selectedPage: Int, pagePosition: Float, backdrop: Glass
         }
     }
     val position = dragging ?: settled.value
-    val stretch by animateFloatAsState(if (touching) 1.06f else 1f,
+    val pressProgress by animateFloatAsState(if (touching) 1f else 0f,
         spring(0.8f, 600f), label = "navigationLens")
     val barShift by animateFloatAsState(shiftTarget,
         spring(0.85f, 450f), label = "navigationShift")
@@ -121,17 +123,27 @@ fun LiquidGlassBottomBar(selectedPage: Int, pagePosition: Float, backdrop: Glass
             }
         }
     }) {
-        Box(Modifier.fillMaxSize().graphicsLayer { translationX = barShift }) {
-            GlassSurface(Modifier.matchParentSize(), shape = CircleShape, radius = 28.dp,
-                backdrop = backdrop, prominent = true, tintStrength = 0.5f, blurRadius = 12.dp) {}
+        BoxWithConstraints(Modifier.fillMaxSize().graphicsLayer { translationX = barShift }) {
+            val barWidth = maxWidth
+            // Record only the page plus the library's frosted bar, before the lens or labels.
+            // Extra sampling space preserves page content around the enlarged capsule.
+            Box(Modifier.requiredSize(barWidth + 24.dp, 80.dp).align(Alignment.Center)
+                .clipToBounds().glassBackdrop(frostedBackdrop, background = backdrop)) {
+                GlassSurface(Modifier.width(barWidth).height(56.dp).align(Alignment.Center),
+                    shape = CircleShape, radius = 28.dp, backdrop = backdrop,
+                    prominent = true, tintStrength = 0.5f, blurRadius = 12.dp) {}
+            }
             BoxWithConstraints(Modifier.fillMaxSize().padding(4.dp)) {
                 val tabWidth = maxWidth / 4
-                // Sample the page directly, excluding both glass layers and all tab labels.
-                GlassSurface(Modifier.offset(x = tabWidth * position).width(tabWidth).fillMaxHeight()
-                    .graphicsLayer { scaleX = stretch; scaleY = stretch },
-                    shape = CircleShape, radius = 24.dp, backdrop = backdrop, prominent = true,
-                    color = MaterialTheme.colorScheme.primary,
-                    tintStrength = if (dark) 0.18f else 0.12f) {}
+                val lensWidth = tabWidth * (1f + 0.12f * pressProgress)
+                val lensHeight = 48.dp + 16.dp * pressProgress
+                // Resize the native component instead of scaling its pixels so its sampling
+                // coordinates and corner radius remain correct while crossing the bar edges.
+                GlassSurface(Modifier.offset(x = tabWidth * position + (tabWidth - lensWidth) / 2,
+                    y = (48.dp - lensHeight) / 2)
+                    .wrapContentSize(Alignment.TopStart, unbounded = true).size(lensWidth, lensHeight),
+                    shape = CircleShape, radius = lensHeight / 2, backdrop = frostedBackdrop,
+                    tintStrength = 0f) {}
                 Row(Modifier.fillMaxSize().selectableGroup()) {
                     items.forEachIndexed { index, (label, icon) ->
                         val interaction = remember { MutableInteractionSource() }

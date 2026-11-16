@@ -21,6 +21,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.*
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -57,11 +58,17 @@ private fun android.view.View.windowOrigin(): Offset {
 val LocalGlassBackdrop = staticCompositionLocalOf<GlassBackdrop?> { null }
 
 /** Record the sampling branch independently of the glass components. */
-fun Modifier.glassBackdrop(backdrop: GlassBackdrop): Modifier = this
+fun Modifier.glassBackdrop(backdrop: GlassBackdrop, background: GlassBackdrop? = null): Modifier = this
     .onGloballyPositioned { backdrop.origin = it.positionInWindow() + backdrop.view.windowOrigin() }
     .drawWithContent {
         val scope = this
         backdrop.layer.record(size = IntSize(size.width.roundToInt(), size.height.roundToInt())) {
+            // Composite the already-recorded page before a derived material. The selection
+            // lens can then refract the frosted navigation surface without sampling itself.
+            if (background?.ready == true) {
+                val offset = background.origin - backdrop.origin
+                translate(offset.x, offset.y) { drawLayer(background.layer) }
+            }
             scope.drawContent()
         }
         backdrop.ready = true
