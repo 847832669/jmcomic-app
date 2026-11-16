@@ -80,6 +80,9 @@ fun LiquidGlassBottomBar(selectedPage: Int, pagePosition: Float, backdrop: Glass
         spring(0.8f, 600f), label = "navigationLens")
     val barShift by animateFloatAsState(shiftTarget,
         spring(0.85f, 450f), label = "navigationShift")
+    val refractIcons = touching || abs(position - selectedPage) > 0.01f
+    val iconOpticalProgress by animateFloatAsState(if (refractIcons) 1f else 0f,
+        spring(1f, 600f), label = "navigationIconOptics")
     val tabAppearance = items.mapIndexed { index, _ ->
         val down by tabInteractions[index].collectIsPressedAsState()
         val scale by animateFloatAsState(if (down) 0.94f else 1f,
@@ -153,7 +156,7 @@ fun LiquidGlassBottomBar(selectedPage: Int, pagePosition: Float, backdrop: Glass
                     items.forEachIndexed { index, (_, icon) ->
                         val (tint, scale) = tabAppearance[index]
                         Column(Modifier.weight(1f).fillMaxHeight()
-                            .graphicsLayer { scaleX = scale; scaleY = scale },
+                            .graphicsLayer { scaleX = scale; scaleY = scale; alpha = iconOpticalProgress },
                             horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                             Icon(icon, null, tint = tint, modifier = Modifier.size(24.dp))
                             Spacer(Modifier.height(2.dp))
@@ -167,20 +170,20 @@ fun LiquidGlassBottomBar(selectedPage: Int, pagePosition: Float, backdrop: Glass
                 val tabWidth = maxWidth / 4
                 val lensWidth = tabWidth * (1f + 0.18f * pressProgress)
                 val lensHeight = restingLensHeight + (72.dp - restingLensHeight) * pressProgress
-                // The resting rim samples only nearby background, keeping the icon in the
-                // undistorted center. Pressing restores the stronger native optical effect.
+                // Respect the library's minimum 12dp height and 20dp offset. Resting
+                // icons are drawn in the foreground rather than being bent by this rim.
                 GlassSurface(Modifier.offset(x = tabWidth * position + (tabWidth - lensWidth) / 2,
                     y = (restingLensHeight - lensHeight) / 2)
                     .wrapContentSize(Alignment.TopStart, unbounded = true).size(lensWidth, lensHeight),
                     shape = CircleShape, radius = lensHeight / 2, backdrop = frostedBackdrop,
-                    tintStrength = 0f, refractionHeight = 4.dp + 8.dp * pressProgress,
-                    refractionOffset = 6.dp + 39.dp * pressProgress,
+                    tintStrength = 0f, refractionHeight = 12.dp,
+                    refractionOffset = 20.dp + 25.dp * pressProgress,
                     dispersion = 0.15f + 0.85f * pressProgress) {}
             }
             // Labels stay sharp above the optics in every gesture state. Their input
             // and semantics share the same fixed hit areas as the underlying icons.
             Row(Modifier.fillMaxSize().padding(4.dp).selectableGroup()) {
-                items.forEachIndexed { index, (label, _) ->
+                items.forEachIndexed { index, (label, icon) ->
                     val (tint, scale) = tabAppearance[index]
                     val active = if (dragging != null) abs(position - index) < 0.5f else selectedPage == index
                     Box(Modifier.weight(1f).fillMaxHeight()
@@ -191,7 +194,9 @@ fun LiquidGlassBottomBar(selectedPage: Int, pagePosition: Float, backdrop: Glass
                         contentAlignment = Alignment.Center) {
                         Column(Modifier.graphicsLayer { scaleX = scale; scaleY = scale }
                             .clearAndSetSemantics {}, horizontalAlignment = Alignment.CenterHorizontally) {
-                            Spacer(Modifier.height(24.dp + 2.dp))
+                            Icon(icon, null, tint = tint, modifier = Modifier.size(24.dp)
+                                .graphicsLayer { alpha = 1f - iconOpticalProgress })
+                            Spacer(Modifier.height(2.dp))
                             Text(label, color = tint, fontSize = 10.sp, lineHeight = 12.sp,
                                 fontWeight = if (active) FontWeight.Bold else FontWeight.Normal, maxLines = 1)
                         }
