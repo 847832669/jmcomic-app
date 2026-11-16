@@ -127,7 +127,7 @@ fun LiquidGlassBottomBar(selectedPage: Int, pagePosition: Float, backdrop: Glass
             val barWidth = maxWidth
             // Record only the page plus the library's frosted bar, before the lens or labels.
             // Extra sampling space preserves page content around the enlarged capsule.
-            Box(Modifier.requiredSize(barWidth + 24.dp, 80.dp).align(Alignment.Center)
+            Box(Modifier.requiredSize(barWidth + 56.dp, 112.dp).align(Alignment.Center)
                 .clipToBounds().glassBackdrop(frostedBackdrop, background = backdrop)) {
                 GlassSurface(Modifier.width(barWidth).height(56.dp).align(Alignment.Center),
                     shape = CircleShape, radius = 28.dp, backdrop = backdrop,
@@ -135,15 +135,19 @@ fun LiquidGlassBottomBar(selectedPage: Int, pagePosition: Float, backdrop: Glass
             }
             BoxWithConstraints(Modifier.fillMaxSize().padding(4.dp)) {
                 val tabWidth = maxWidth / 4
-                val lensWidth = tabWidth * (1f + 0.12f * pressProgress)
-                val lensHeight = 48.dp + 16.dp * pressProgress
+                val lensWidth = tabWidth * (1f + 0.24f * pressProgress)
+                val lensHeight = 48.dp + 32.dp * pressProgress
                 // Resize the native component instead of scaling its pixels so its sampling
                 // coordinates and corner radius remain correct while crossing the bar edges.
                 GlassSurface(Modifier.offset(x = tabWidth * position + (tabWidth - lensWidth) / 2,
                     y = (48.dp - lensHeight) / 2)
                     .wrapContentSize(Alignment.TopStart, unbounded = true).size(lensWidth, lensHeight),
                     shape = CircleShape, radius = lensHeight / 2, backdrop = frostedBackdrop,
-                    tintStrength = 0f) {}
+                    // At 80dp the bar's edges sit 12dp inside the lens, in its clear core.
+                    // Keep the entire native optical material, with a stronger dispersive
+                    // rim around that undistorted view of the real frosted bar.
+                    tintStrength = 0f, refractionHeight = 12.dp,
+                    refractionOffset = 45.dp, dispersion = 1f) {}
                 Row(Modifier.fillMaxSize().selectableGroup()) {
                     items.forEachIndexed { index, (label, icon) ->
                         val interaction = remember { MutableInteractionSource() }

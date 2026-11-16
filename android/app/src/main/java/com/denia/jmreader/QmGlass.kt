@@ -102,6 +102,9 @@ fun GlassSurface(
     prominent: Boolean = false,
     tintStrength: Float? = null,
     blurRadius: Dp = 0.dp,
+    refractionHeight: Dp = 20.dp,
+    refractionOffset: Dp = 70.dp,
+    dispersion: Float = 0.5f,
     onClick: (() -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
@@ -141,7 +144,9 @@ fun GlassSurface(
                 onRelease = { it.release() }, update = {
                     it.update(backdrop!!, density, direction, actualRadius,
                         color.red, color.green, color.blue, alpha,
-                        with(density) { blurRadius.toPx() }.coerceAtLeast(0.01f))
+                        with(density) { blurRadius.toPx() }.coerceAtLeast(0.01f),
+                        with(density) { refractionHeight.toPx() },
+                        with(density) { refractionOffset.toPx() }, dispersion)
                 })
         }
         content()
