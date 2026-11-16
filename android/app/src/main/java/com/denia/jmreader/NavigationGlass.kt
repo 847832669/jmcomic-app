@@ -104,5 +104,3 @@ fun LiquidGlassBottomBar(selectedPage: Int, pagePosition: Float, backdrop: Glass
         }
     }
 }
-
-/** Only the sampled scene enters this RenderNode. Sharp icons/text and the bar never feed back. */
