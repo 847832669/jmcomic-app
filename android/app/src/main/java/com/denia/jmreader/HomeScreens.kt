@@ -94,7 +94,7 @@ fun PagedGrid(loader: suspend (Int) -> List<JmApi.Album>, router: Router, key: A
         loading && items.isEmpty() -> LoadingBox()
         error != null && items.isEmpty() -> ErrorText(error!!) { error = null; scope.launch { load(1) } }
         else -> LazyVerticalGrid(GridCells.Fixed(3), state = gridState,
-            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 100.dp),
+            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 20.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
             items(shown, key = { it.id }) { AlbumCard(it, router) }
@@ -156,7 +156,7 @@ fun HomeScreen(router: Router, goProfile: () -> Unit, goSearch: () -> Unit = {})
         when {
             ch.slug == null -> RecommendContent(router)
             ch.slug == "latest" -> PagedGrid(loader = { p -> JmApi.latest(p) }, router = router, key = "latest")
-            ch.slug == "random" -> PagedGrid(loader = { p -> if (p == 1) JmApi.randomRecommend() else emptyList() }, router = router, key = "random")
+            ch.slug == "random" -> PagedGrid(loader = { p -> if (p == 1) JmApi.randomPool() else emptyList() }, router = router, key = "random")
             else -> PagedGrid(loader = { p -> JmApi.categoryFilter(ch.slug, p) }, router = router, key = "cat-${ch.slug}")
         }
     }
@@ -192,7 +192,7 @@ fun RecommendContent(router: Router) {
     LaunchedEffect(reload) {
         try {
             sections = JmApi.promote().filter { it.first != "連載更新" }
-            randoms = JmApi.randomRecommend()
+            randoms = JmApi.randomPool()
         } catch (e: Exception) { error = e.message }
     }
     LaunchedEffect(sections, randoms) {
@@ -202,7 +202,7 @@ fun RecommendContent(router: Router) {
     when {
         sections == null && error == null -> LoadingBox()
         error != null -> ErrorText(error!!) { error = null; sections = null; reload++ }
-        else -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(top = 10.dp, bottom = 100.dp)) {
+        else -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(top = 10.dp, bottom = 20.dp)) {
             sections?.forEach { (title, albums) ->
                 val shownAlbums = BlockTags.visible(albums)
                 if (shownAlbums.isNotEmpty()) {
@@ -340,7 +340,8 @@ fun SearchScreen(router: Router, history: HistoryStore) {
             }
             Text("同人推荐", fontWeight = FontWeight.Bold, fontSize = 14.sp,
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp))
-            PagedGrid(loader = { p -> if (p == 1) JmApi.categoryFilter("doujin", 1) else emptyList() }, router = router, key = "doujin-rec")
+            // A random page per visit (was pinned to page 1 forever, like iOS).
+            PagedGrid(loader = { p -> if (p == 1) JmApi.categoryFilter("doujin", (1..60).random()) else emptyList() }, router = router, key = "doujin-rec")
         } else {
             PagedGrid(loader = { p -> JmApi.search(s, p, order, typeIdx).second }, router = router, key = "search-$s-$order-$typeIdx")
         }
@@ -357,7 +358,7 @@ fun CategoriesScreen(router: Router) {
         cats == null && error == null -> LoadingBox()
         error != null -> ErrorText(error!!)
         else -> androidx.compose.foundation.lazy.LazyColumn(Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 100.dp)) {
+            contentPadding = PaddingValues(bottom = 20.dp)) {
             items(cats!!.filter { it.slug.isNotEmpty() }, key = { it.slug }) { c ->
                 Row(Modifier.fillMaxWidth().clickable { router.push(CategoryDest(c.slug, c.name)) }
                     .padding(horizontal = 16.dp, vertical = 15.dp), verticalAlignment = Alignment.CenterVertically) {

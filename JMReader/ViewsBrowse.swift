@@ -1,6 +1,7 @@
 import SwiftUI
 
 let accentPink = Color(red: 1.0, green: 0.18, blue: 0.533)
+let accentBlue = Color(red: 0.0, green: 0.569, blue: 1.0)
 
 // MARK: - shared bits
 
@@ -181,6 +182,7 @@ enum HomeChannel: Identifiable, Equatable {
 struct HomeView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var downloads: DownloadManager
+    @EnvironmentObject var account: AccountStore
     @State private var cats: [JMCategory] = []
     @State private var channel: HomeChannel = .recommend
 
@@ -217,6 +219,17 @@ struct HomeView: View {
         }
     }
 
+    private var greeting: String {
+        switch Calendar.current.component(.hour, from: Date()) {
+        case 0..<5: return "夜深了"
+        case 5..<9: return "早上好"
+        case 9..<12: return "上午好"
+        case 12..<14: return "中午好"
+        case 14..<18: return "下午好"
+        default: return "晚上好"
+        }
+    }
+
     private var header: some View {
         HStack(spacing: 10) {
             Button {
@@ -229,18 +242,12 @@ struct HomeView: View {
                     .overlay(Circle().strokeBorder(Color.white.opacity(0.25), lineWidth: 1))
             }
             .buttonStyle(.plain)
-            Button {
-                appState.goSearch()
-            } label: {
-                HStack(spacing: 7) {
-                    Image(systemName: "magnifyingglass")
-                    Text("搜索").foregroundColor(.secondary)
-                    Spacer()
-                }
-                .padding(.horizontal, 14).padding(.vertical, 9)
-                .glassSurface(Capsule(), interactive: true)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(greeting).font(.headline)
+                Text(account.username.flatMap { $0.isEmpty ? nil : "@\($0)" } ?? "点头像登录账号")
+                    .font(.caption).foregroundColor(.secondary)
             }
-            .buttonStyle(.plain)
+            Spacer()
             NavigationLink {
                 DownloadsView(embedded: true)
             } label: {
@@ -352,8 +359,27 @@ struct RecommendView: View {
     @State private var sections: [PromoSection] = []
     @State private var randoms: [Comic] = []
     @State private var loading = false
+    @State private var rerolling = false
+    @AppStorage("jm.recommendMode") private var mode = "standard"
 
     var body: some View {
+        VStack(spacing: 0) {
+            Picker("推荐模式", selection: $mode) {
+                Text("推荐").tag("standard")
+                Text("猜你喜欢").tag("foryou")
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 2)
+            if mode == "foryou" {
+                ForYouView()
+            } else {
+                standardBody
+            }
+        }
+        .task { if sections.isEmpty { await load() } }
+    }
+
+    private var standardBody: some View {
         Group {
             if sections.isEmpty && loading {
                 ProgressView("加载中…").frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -364,9 +390,21 @@ struct RecommendView: View {
                             ShelfRow(section: sec)
                         }
                         if !randoms.isEmpty {
-                            Text("随机推荐")
-                                .font(.headline)
-                                .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 6)
+                            HStack {
+                                Text("随机推荐").font(.headline)
+                                Spacer()
+                                Button {
+                                    Task { await rerollRandoms() }
+                                } label: {
+                                    if rerolling {
+                                        ProgressView()
+                                    } else {
+                                        Text("换一批").font(.subheadline).foregroundColor(accentPink)
+                                    }
+                                }
+                                .disabled(rerolling)
+                            }
+                            .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 6)
                             ComicGrid(items: randoms, columnsOverride: 2, applyBlockFilter: true)
                         }
                         if sections.isEmpty && randoms.isEmpty && !loading {
@@ -379,7 +417,6 @@ struct RecommendView: View {
                 .refreshable { await load() }
             }
         }
-        .task { if sections.isEmpty { await load() } }
     }
 
     private func load() async {
@@ -387,7 +424,50 @@ struct RecommendView: View {
         defer { loading = false }
         let all = (try? await JMClient.shared.promote()) ?? sections
         sections = all.filter { !$0.title.contains("連載更新") && !$0.title.contains("连载更新") }
-        randoms = (try? await JMClient.shared.randomRecommend()) ?? randoms
+        let fresh = await loadRandoms()
+        if !fresh.isEmpty { randoms = fresh }
+    }
+
+    /// Manual re-roll for the 随机推荐 grid (the header's 换一批 button).
+    /// Exists because pull-to-refresh on this page proved unreliable at
+    /// re-rolling the randoms on device (iOS 27 beta): a plain button
+    /// action has no gesture/task-cancellation ambiguity.
+    private func rerollRandoms() async {
+        if rerolling { return }
+        rerolling = true
+        defer { rerolling = false }
+        let fresh = await loadRandoms()
+        if !fresh.isEmpty { randoms = fresh }
+    }
+
+    /// The server's `random_recommend` returns the same ~30 newest albums
+    /// shuffled on every call (verified live 2026-11-14: three calls, one
+    /// identical id set), so refreshing never surfaced anything new. Build
+    /// our own pool instead: a random window of the latest feed (80 per
+    /// page), deduped and shuffled; each load picks a fresh window, so
+    /// pull-to-refresh actually re-rolls. Falls back to the server list
+    /// when the feed cannot be read at all.
+    private func loadRandoms() async -> [Comic] {
+        let start = Int.random(in: 1...24)
+        var pool: [Comic] = []
+        var seen = Set<String>()
+        for page in start..<(start + 3) {
+            // One retry per page and never abandon the whole draw over a
+            // single failed page; an empty result means "keep the old
+            // list" to the caller — crucially there is NO silent fallback
+            // to the server's fixed random_recommend set anymore.
+            var items: [Comic] = []
+            for _ in 0..<2 where items.isEmpty {
+                if let got = try? await JMClient.shared.latest(page: page) { items = got }
+            }
+            for c in items where seen.insert(c.id).inserted { pool.append(c) }
+        }
+        guard !pool.isEmpty else { return [] }
+        // Prefer albums that are not already on screen, so a re-roll is
+        // unmistakably a new batch.
+        let current = Set(randoms.map(\.id))
+        let fresh = pool.filter { !current.contains($0.id) }
+        return Array((fresh.count >= 12 ? fresh : pool).shuffled().prefix(36))
     }
 }
 
@@ -566,14 +646,28 @@ struct SearchView: View {
                         VStack(alignment: .leading, spacing: 0) {
                             historyView
                             if !doujinItems.isEmpty {
-                                Text("同人推荐").font(.headline)
-                                    .padding(.horizontal, 16).padding(.top, 20).padding(.bottom, 6)
+                                HStack {
+                                    Text("同人推荐").font(.headline)
+                                    Spacer()
+                                    Button {
+                                        Task { await loadDoujin(reroll: true) }
+                                    } label: {
+                                        if doujinLoading {
+                                            ProgressView()
+                                        } else {
+                                            Text("换一批").font(.subheadline).foregroundColor(accentPink)
+                                        }
+                                    }
+                                    .disabled(doujinLoading)
+                                }
+                                .padding(.horizontal, 16).padding(.top, 20).padding(.bottom, 6)
                                 ComicGrid(items: doujinItems, applyBlockFilter: true)
                             }
                         }
                         .padding(.bottom, 20)
                     }
                     .tabMinimizeOnScroll()
+                    .refreshable { await loadDoujin(reroll: true) }
                     .task { await loadDoujin() }
                 } else {
                     ScrollView {
@@ -607,16 +701,23 @@ struct SearchView: View {
         }
     }
 
-    private func loadDoujin() async {
+    private func loadDoujin(reroll: Bool = false) async {
         // The recommendations used to vanish intermittently: a single failed
         // (or .task-cancelled) fetch left doujinItems empty with no retry.
         // Retry with backoff and only assign on success.
-        if !doujinItems.isEmpty || doujinLoading { return }
+        // They also never changed: the fetch was pinned to page 1 and ran
+        // once per view lifetime. Each load now draws a random page of the
+        // doujin category (80 per page, thousands of pages), and the search
+        // page's pull-to-refresh re-rolls it. A failed re-roll keeps the
+        // previous list.
+        if doujinLoading { return }
+        if !reroll && !doujinItems.isEmpty { return }
         doujinLoading = true
         defer { doujinLoading = false }
+        let page = Int.random(in: 1...60)
         for attempt in 0..<3 {
             if Task.isCancelled { return }
-            if let res = try? await JMClient.shared.categoryFilter(slug: "doujin", page: 1),
+            if let res = try? await JMClient.shared.categoryFilter(slug: "doujin", page: page),
                !res.items.isEmpty {
                 doujinItems = res.items
                 return
@@ -1086,7 +1187,7 @@ struct FavoritesView: View {
 
     private func downloadSelected() {
         for comic in shownCloud where selectedIds.contains(comic.id) {
-            downloads.enqueue(albumId: comic.id, title: comic.name)
+            downloads.enqueue(albumId: comic.id, title: comic.name, category: comic.categoryTitle)
         }
         selecting = false
         selectedIds.removeAll()
@@ -1412,7 +1513,7 @@ struct DetailView: View {
                 .padding(.horizontal, 16).padding(.top, 14)
         } else {
             Button {
-                downloads.enqueue(albumId: d.id, title: d.name)
+                downloads.enqueue(albumId: d.id, title: d.name, category: d.categoryTitle)
             } label: {
                 Label("下载全本", systemImage: "arrow.down.circle")
                     .font(.headline).foregroundColor(accentPink)
@@ -1727,6 +1828,7 @@ struct ProfileStatsCard: View {
 
 struct SettingsView: View {
     @EnvironmentObject var blockStore: BlockTagStore
+    @EnvironmentObject var updater: UpdateChecker
     @AppStorage("settings.autoCheckIn") private var autoCheckIn = true
     @State private var storageBytes: Int64?
     @State private var apiModeText = "自动"
@@ -1766,6 +1868,32 @@ struct SettingsView: View {
                                ? nil : "\(blockStore.blockedTags.count + blockStore.blockedAuthors.count) 项") {
                         BlockedTagsView()
                     }
+                    Divider().padding(.leading, 52)
+                    Button {
+                        Task { await updater.check(manual: true) }
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "arrow.up.circle")
+                                .foregroundColor(accentPink)
+                                .frame(width: 24)
+                            Text("检查更新").foregroundColor(.primary)
+                            Spacer()
+                            if updater.checking {
+                                ProgressView()
+                            } else if updater.hasUpdate {
+                                Text("有新版 v\(updater.latestVersion ?? "")")
+                                    .foregroundColor(accentPink)
+                            } else if updater.latestVersion != nil {
+                                Text("已是最新").foregroundColor(.secondary)
+                            } else {
+                                Text("当前 v\(updater.currentVersion)").foregroundColor(.secondary)
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
                 }
                 .padding(.vertical, 6)
                 .glassSurface(RoundedRectangle(cornerRadius: 20, style: .continuous))

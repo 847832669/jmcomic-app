@@ -9,7 +9,7 @@
 
 ## 当前分支
 
-本仓库是 [denia-dev/jmcomic-app](https://github.com/denia-dev/jmcomic-app) 的个人分支，已同步上游 v2.19。当前 Android 版本为 **2.19-glass.4**（versionCode **17**），新增日夜主题、QmDeve 全局液态玻璃、作品描述、按需评论与评论关键词屏蔽；这些分支增强仅针对 Android。
+本仓库是 [denia-dev/jmcomic-app](https://github.com/denia-dev/jmcomic-app) 的个人分支，已合并上游 v2.30（`871aed1`）。当前 Android 源码版本为 **2.30-glass.1**（versionCode **19**），新增日夜主题、QmDeve 全局液态玻璃、作品描述、按需评论与评论关键词屏蔽；这些分支增强仅针对 Android。
 
 - [Android 安装、功能与构建说明](android/README.md)
 - [描述、评论接口与真机验证记录](android/COMMUNITY.md)
@@ -25,6 +25,14 @@
 - 账号登录、云端收藏同步（支持多收藏夹）、每日签到（当月日历 + 连签奖励，可自动签到）
 - 个人页：收藏搜索与排序（最近 / 最早）、观看历史、阅读统计、个人资料（经验值 / 等级 / 金币）；设置（右上角齿轮）：线路设置（官方域名自动更新、测速与手动切换）、存储空间（缓存占用查看与清理）
 - iOS 26 原生液态玻璃界面；Android 版采用 QmDeve 液态玻璃组件，覆盖底栏、工具栏、卡片、按钮、输入框与弹窗
+
+## 上游 v2.30 同步
+
+- Android 底部「分类」改为「书架」：导入 CBZ / ZIP / PDF / EPUB / TXT，按下载、导入、漫画、小说筛选，支持多选删除与最近阅读续看。官方分类仍可从首页频道进入。
+- 本地小说支持上下滚动、左右翻页、EPUB 插图、目录、字号与页数提示；书架与新增弹窗使用 QmDeve 玻璃材质及日夜主题。
+- 合入随机推荐池、同人推荐页轮换、屏蔽刷新和检查更新；更新检查使用本仓库并支持 `glass` 版本号。
+- iOS 源码同步书架、RAR 导入、猜你喜欢、问候语、小说沉浸阅读与批量删除；Android 导入格式以上述列表为准。iOS 需要 macOS / Xcode 验证。
+- 以下下载入口仍为已发布的 `2.19-glass.4`；本次同步未创建新的 Release。
 
 ## Android 分支增强
 
@@ -63,4 +71,4 @@
 
 ## 版本历史
 
-见 [CHANGELOG.md](CHANGELOG.md)。Android `2.19-glass.*` 条目记录本分支增强，其余条目保留上游版本历史。
+见 [CHANGELOG.md](CHANGELOG.md)。Android `*-glass.*` 条目记录本分支增强，其余条目保留上游版本历史。

@@ -24,6 +24,7 @@ import kotlinx.coroutines.withContext
 @Composable
 fun SettingsScreen(router: Router, account: AccountStore) {
     val context = LocalContext.current
+    val settingsScope = rememberCoroutineScope()
     var storageBytes by remember { mutableStateOf<Long?>(null) }
     var commentKeyword by remember { mutableStateOf("") }
     LaunchedEffect(Unit) {
@@ -124,6 +125,29 @@ fun SettingsScreen(router: Router, account: AccountStore) {
                     storageBytes?.let {
                         Text(android.text.format.Formatter.formatFileSize(context, it), fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Text(" ›", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            IosCard(radius = 16.dp, onClick = {
+                settingsScope.launch { UpdateCheck.check(context, manual = true) }
+            }, modifier = Modifier.fillMaxWidth()) {
+                Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("检查更新", fontSize = 16.sp)
+                    Spacer(Modifier.weight(1f))
+                    val cur = UpdateCheck.currentVersion(context)
+                    when {
+                        UpdateCheck.checking ->
+                            Text("检查中…", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        UpdateCheck.errorMessage != null ->
+                            Text(UpdateCheck.errorMessage!!, fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+                        UpdateCheck.latestVersion == null ->
+                            Text("当前 v$cur", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        UpdateCheck.isUpdate(cur) ->
+                            Text("有新版 v${UpdateCheck.latestVersion}", fontSize = 12.sp, color = Pink)
+                        else ->
+                            Text("已是最新", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Text(" ›", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }

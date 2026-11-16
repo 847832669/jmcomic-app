@@ -87,16 +87,18 @@ fun ReaderScreen(dest: ReaderDest, router: Router) {
         val files = (0 until (imagesArr?.length() ?: 0)).map { imagesArr!!.optString(it) }
         val series = parseSeries(ch, dest.chapterId)
         val curIdx = series.indexOfFirst { it.first == dest.chapterId }
-        val listState = rememberLazyListState()
+        val startPage = dest.startPage.coerceIn(0, maxOf(0, files.size - 1))
+        val listState = rememberLazyListState(initialFirstVisibleItemIndex = startPage)
         val scrollPage by remember { derivedStateOf { (listState.firstVisibleItemIndex + 1).coerceIn(1, maxOf(1, files.size)) } }
         var mode by remember { mutableStateOf(Settings.readerMode) }
         var rtl by remember { mutableStateOf(Settings.readerRtl) }
-        var pageIdx by remember(dest.chapterId) { mutableIntStateOf(0) }
+        var pageIdx by remember(dest.chapterId) { mutableIntStateOf(startPage) }
         val pageNow = if (mode == "page") (pageIdx + 1).coerceIn(1, maxOf(1, files.size)) else scrollPage
         // Reading stats: count pages as they are actually reached (both
         // modes funnel through pageNow), never the whole chapter at open.
         LaunchedEffect(pageNow, dest.chapterId) {
             ReadingStats.recordPage(dest.chapterId, pageNow - 1, files.size)
+            ReadHistory.record(dest.albumId.ifEmpty { dest.chapterId }, dest.albumTitle, dest.chapterId, pageNow - 1)
         }
 
         GlassSurface(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp)) {

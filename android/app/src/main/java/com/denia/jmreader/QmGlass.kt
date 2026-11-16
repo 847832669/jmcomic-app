@@ -16,7 +16,7 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
@@ -165,7 +165,7 @@ fun GlassSurface(
 @Composable
 fun LiquidGlassBottomBar(selectedPage: Int, pagePosition: Float, backdrop: GlassBackdrop,
                          onSelect: (Int) -> Unit, modifier: Modifier = Modifier) {
-    val items = listOf("首页" to Icons.Default.Home, "分类" to Icons.Default.Apps,
+    val items = listOf("首页" to Icons.Default.Home, "书架" to Icons.Default.MenuBook,
         "个人" to Icons.Default.Person, "搜索" to Icons.Default.Search)
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
     var dragging by remember { mutableStateOf<Float?>(null) }

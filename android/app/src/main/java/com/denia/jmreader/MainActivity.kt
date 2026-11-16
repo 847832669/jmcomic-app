@@ -53,7 +53,7 @@ fun ExternalPdfOpener(uri: android.net.Uri, onReady: (java.io.File) -> Unit, onF
     Box(Modifier.fillMaxSize())
 }
 
-// Display order: 首页 / 分类 / 个人 / 搜索 (same as the iOS app)
+// Display order follows upstream v2.30; keep the fork's glass material.
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun JmApp(externalPdf: android.net.Uri? = null, onExternalPdfDone: () -> Unit = {}) {
@@ -63,12 +63,13 @@ fun JmApp(externalPdf: android.net.Uri? = null, onExternalPdfDone: () -> Unit = 
     val history = remember { HistoryStore(context) }
     remember { BlockTags.init(context); ReadingStats.init(context); RemovedFavs.init(context) }
     remember { Lines.init(context) }
-    remember { Settings.init(context) }
+    remember { Settings.init(context); LocalBooks.init(context); ReadHistory.init(context) }
     remember { FolderRegistry.init(context) }
     LaunchedEffect(Unit) {
         JmApi.imgHost = Lines.currentImgHost()
         launch { Lines.refresh(false) }
     }
+    LaunchedEffect(Unit) { UpdateCheck.checkOnLaunch(context) }
     val router = remember { Router() }
     val pagerState = rememberPagerState(pageCount = { 4 })
     val scope = rememberCoroutineScope()
@@ -80,6 +81,7 @@ fun JmApp(externalPdf: android.net.Uri? = null, onExternalPdfDone: () -> Unit = 
     }
 
     var viewingExternal by remember { mutableStateOf<java.io.File?>(null) }
+    val showBottomBar = router.stack.isEmpty() && viewingExternal == null && externalPdf == null
     JmTheme {
         val wallpaper = rememberGlassBackdrop()
         val scene = rememberGlassBackdrop()
@@ -87,7 +89,8 @@ fun JmApp(externalPdf: android.net.Uri? = null, onExternalPdfDone: () -> Unit = 
             Box(Modifier.fillMaxSize()) {
                 Box(Modifier.fillMaxSize().glassBackdrop(scene)) {
                     Box(Modifier.fillMaxSize().glassBackdrop(wallpaper)) { GlassWallpaper() }
-                    Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.statusBars)) {
+                    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars)) {
+                        Box(Modifier.weight(1f).fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars)) {
                         when {
                             viewingExternal != null -> PdfViewerScreen(viewingExternal!!) { viewingExternal = null }
                             externalPdf != null -> ExternalPdfOpener(externalPdf,
@@ -101,7 +104,7 @@ fun JmApp(externalPdf: android.net.Uri? = null, onExternalPdfDone: () -> Unit = 
                                             0 -> HomeScreen(router,
                                                 goProfile = { scope.launch { pagerState.animateScrollToPage(2) } },
                                                 goSearch = { scope.launch { pagerState.animateScrollToPage(3) } })
-                                            1 -> CategoriesScreen(router)
+                                            1 -> BookshelfScreen(router)
                                             2 -> ProfileScreen(router, account, library)
                                             else -> SearchScreen(router, history)
                                         }
@@ -115,6 +118,8 @@ fun JmApp(externalPdf: android.net.Uri? = null, onExternalPdfDone: () -> Unit = 
                                                 scope.launch { pagerState.animateScrollToPage(2) }
                                             })
                                         is ReaderDest -> ReaderScreen(top, router)
+                                        is LocalComicDest, is LocalNovelDest -> LocalReaderHost(top, router)
+                                        is PdfDest -> PdfViewerScreen(java.io.File(top.path)) { router.pop() }
                                         is AuthorDest -> AuthorScreen(top, router)
                                         is CategoryDest -> CategoryPage(top, router)
                                         DownloadsDest -> DownloadsScreen(router)
@@ -127,18 +132,21 @@ fun JmApp(externalPdf: android.net.Uri? = null, onExternalPdfDone: () -> Unit = 
                             }
                         }
                     }
+                        if (showBottomBar) Spacer(Modifier.height(88.dp))
+                    }
                 }
-                if (router.stack.isEmpty() && viewingExternal == null && externalPdf == null) {
-                    LiquidGlassBottomBar(
-                        selectedPage = tab,
-                        pagePosition = pagerState.currentPage + pagerState.currentPageOffsetFraction,
-                        backdrop = scene,
-                        onSelect = { page -> scope.launch { pagerState.animateScrollToPage(page) } },
-                        modifier = Modifier.align(Alignment.BottomCenter)
-                            .windowInsetsPadding(WindowInsets.navigationBars)
-                            .padding(horizontal = 20.dp, vertical = 12.dp),
-                    )
+                if (showBottomBar) {
+                        LiquidGlassBottomBar(
+                            selectedPage = tab,
+                            pagePosition = pagerState.currentPage + pagerState.currentPageOffsetFraction,
+                            backdrop = scene,
+                            onSelect = { page -> scope.launch { pagerState.animateScrollToPage(page) } },
+                            modifier = Modifier.align(Alignment.BottomCenter)
+                                .windowInsetsPadding(WindowInsets.navigationBars)
+                                .padding(horizontal = 20.dp, vertical = 12.dp),
+                        )
                 }
+                if (UpdateCheck.showPrompt) UpdatePromptDialog(context)
             }
         }
     }
