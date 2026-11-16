@@ -3,6 +3,7 @@ package com.denia.jmreader
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -45,6 +46,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Immersive top: transparent status bar, the wallpaper gradient runs
+        // edge to edge; content keeps its own status-bar inset padding.
+        enableEdgeToEdge()
         if (savedInstanceState == null && intent?.action == android.content.Intent.ACTION_VIEW) {
             pdfUri = intent.data
         }
