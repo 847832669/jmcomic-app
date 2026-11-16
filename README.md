@@ -9,7 +9,7 @@
 
 ## 当前分支
 
-本仓库是 [denia-dev/jmcomic-app](https://github.com/denia-dev/jmcomic-app) 的个人分支，已合并上游 v2.30（`871aed1`）。当前 Android 源码版本为 **2.30-glass.4**（versionCode **22**），新增日夜主题、QmDeve 全局液态玻璃、液态玻璃悬浮底栏、作品描述、按需评论、评论关键词屏蔽、漫画续读与本地浏览历史；这些分支增强仅针对 Android。
+本仓库是 [denia-dev/jmcomic-app](https://github.com/denia-dev/jmcomic-app) 的个人分支，已合并上游 v2.30（`871aed1`）。当前 Android 源码版本为 **2.30-glass.6**（versionCode **24**），新增日夜主题、QmDeve 全局液态玻璃、液态玻璃悬浮底栏、作品描述、按需评论、评论关键词屏蔽、漫画续读与本地浏览历史；这些分支增强仅针对 Android。
 
 - [Android 安装、功能与构建说明](android/README.md)
 - [描述、评论接口与真机验证记录](android/COMMUNITY.md)

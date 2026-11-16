@@ -361,7 +361,10 @@ public class LiquidGlassView extends ViewGroup {
                 if (cornerRadius > maxPx) {
                     cornerRadius = maxPx;
                 }
-                rebuild();
+                // The child renderer already handles size changes. Reuse it while the
+                // navigation capsule animates instead of recreating its GPU shader
+                // on every frame (which can briefly leave the optical layer blank).
+                updateConfig();
             }
         }
     }
