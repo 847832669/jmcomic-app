@@ -12,6 +12,8 @@ Local adaptations:
 - Dispose replaced RenderNodes and guard removal of dead ViewTreeObserver listeners.
 - Log shader initialization for device verification.
 
+All global surfaces, the floating navigation bar and its moving selection lens share the upstream default optics (20dp refraction height, 70dp offset, 0.5 dispersion and 0.01px blur). Only shape and theme tint are configured; no separate navigation shader is used.
+
 `QmGlassHost` hosts the real `LiquidGlassView` behind Compose content. A sibling ViewGroup exposes a crop of the recorded Compose backdrop via the library's `bind()` API. Foreground input and accessibility stay with Compose. Each library renderer records the bounds of its own surface rather than the entire screen.
 
 The library provides refraction, dispersion, tint and GPU blur on API 33+. On older systems the app supplies a legible translucent surface; the removed Kyant0 shader / CPU renderer is no longer used. The app's existing background recording and navigation layout retain their earlier attribution in `third-party/Kyant0-AndroidLiquidGlass`.

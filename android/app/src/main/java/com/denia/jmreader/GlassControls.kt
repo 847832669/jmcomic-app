@@ -39,7 +39,7 @@ fun GlassOutlinedButton(
     shape: Shape = RoundedCornerShape(24.dp),
     content: @Composable RowScope.() -> Unit,
 ) {
-    GlassSurface(modifier, shape = shape, tintStrength = 0.4f) {
+    GlassSurface(modifier, shape = shape, tintStrength = 0.12f) {
         OutlinedButton(onClick, enabled = enabled, shape = shape, border = null, content = content)
     }
 }
@@ -59,7 +59,7 @@ fun GlassTextField(
     colors: TextFieldColors = OutlinedTextFieldDefaults.colors(),
     visualTransformation: VisualTransformation = VisualTransformation.None,
 ) {
-    GlassSurface(modifier, shape = shape, tintStrength = 0.45f) {
+    GlassSurface(modifier, shape = shape, tintStrength = 0.16f) {
         OutlinedTextField(value, onValueChange, Modifier.fillMaxWidth(),
             label = label, placeholder = placeholder, trailingIcon = trailingIcon,
             singleLine = singleLine, maxLines = maxLines, enabled = enabled,
@@ -79,7 +79,7 @@ fun GlassAlertDialog(
 ) {
     Dialog(onDismissRequest) {
         GlassSurface(shape = RoundedCornerShape(28.dp), radius = 28.dp, prominent = true,
-            tintStrength = 0.82f) {
+            tintStrength = 0.58f) {
             Column(Modifier.padding(24.dp)) {
                 title?.let {
                     ProvideTextStyle(MaterialTheme.typography.headlineSmall) { it() }
