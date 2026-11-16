@@ -1,6 +1,6 @@
 # JM Reader for Android
 
-JM Reader 的 Android 版本（Kotlin + Jetpack Compose），与 iOS 版使用同一数据源，在同一仓库维护。本分支当前版本为 **2.30-glass.4**（versionCode **22**），已合并上游 v2.30（`871aed1`）；下方发布包仍为 `2.19-glass.4`。
+JM Reader 的 Android 版本（Kotlin + Jetpack Compose），与 iOS 版使用同一数据源，在同一仓库维护。本分支当前版本为 **2.30-glass.5**（versionCode **23**），已合并上游 v2.30（`871aed1`）；下方发布包仍为 `2.19-glass.4`。
 
 ## 安装
 
@@ -68,9 +68,9 @@ gradle testDebugUnitTest assembleDebug
 
 入口：底部「个人」→ 右上角齿轮 →「外观」。默认跟随系统，选择日间或夜间后立即更新页面文字、背景和系统栏，并保存到本机；无需登录账号。
 
-工具栏、卡片、搜索与输入框、筛选标签、主要按钮、弹窗、阅读器控制区、底栏和移动选中透镜，统一使用 QmDeve 玻璃材质。底栏保留四个入口和粉色选中反馈，支持点击、横向拖动和页面联动；文字与漫画原图保持清晰。参数与适配见 [液态玻璃说明](LIQUID_GLASS.md)。
+工具栏、卡片、搜索与输入框、筛选标签、主要按钮、弹窗、阅读器控制区、底栏和移动选中透镜，统一使用 QmDeve 玻璃材质。底栏保留四个入口和粉色选中反馈，支持点击、横向拖动和页面联动；按下时透明透镜放大 6%，跟随手指移动，整体底栏同向轻移最多 6dp，松手回弹；文字与漫画原图保持清晰。参数与适配见 [液态玻璃说明](LIQUID_GLASS.md)。
 
-所有玻璃表面使用 [QmDeve/AndroidLiquidGlassView](https://github.com/QmDeve/AndroidLiquidGlassView) 的实际 `LiquidGlassView` 组件，由 `:liquidglass` 源码模块提供。原 Java 组件与 AGSL 着色器保留，构建适配 SDK 35 / Java 17。统一采用库默认的 20dp 折射高度、70dp 折射偏移、0.5 色散与 0.01px 模糊，按组件尺寸设置圆角与主题着色。来源版本、MIT 许可证和兼容修正见 [组件库说明](liquidglass/NOTICE.md)。
+所有玻璃表面使用 [QmDeve/AndroidLiquidGlassView](https://github.com/QmDeve/AndroidLiquidGlassView) 的实际 `LiquidGlassView` 组件，由 `:liquidglass` 源码模块提供。原 Java 组件与 AGSL 着色器保留，构建适配 SDK 35 / Java 17。统一保留库默认的 20dp 折射高度、70dp 折射偏移与 0.5 色散。底栏背景通过库 API 使用 12dp 磨砂模糊与 0.5 主题着色，选中透镜和其它表面维持 0.01px 模糊；圆角按组件尺寸设置。来源版本、MIT 许可证和兼容修正见 [组件库说明](liquidglass/NOTICE.md)。
 
 - Android 13 / API 33 及以上：GPU 模糊、AGSL 边缘折射、色散与材质着色。
 - Android 8–12 / API 26–32：清晰、可操作的半透明表面。
@@ -79,7 +79,7 @@ gradle testDebugUnitTest assembleDebug
 
 ## 验证记录
 
-`2.30-glass.4` 的构建与真机验证记录见 [液态玻璃说明](LIQUID_GLASS.md)。
+`2.30-glass.5` 的构建与真机验证记录见 [液态玻璃说明](LIQUID_GLASS.md)。
 
 2026-11-13 的验证范围：
 
