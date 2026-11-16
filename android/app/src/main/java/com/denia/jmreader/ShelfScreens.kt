@@ -247,7 +247,8 @@ fun BookshelfScreen(router: Router) {
             }
         } else {
             LazyVerticalGrid(columns = GridCells.Fixed(3),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 10.dp,
+                    bottom = 10.dp + LocalNavigationClearance.current),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
                 modifier = Modifier.fillMaxSize()) {

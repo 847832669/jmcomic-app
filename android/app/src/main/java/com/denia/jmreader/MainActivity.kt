@@ -99,14 +99,16 @@ fun JmApp(externalPdf: android.net.Uri? = null, onExternalPdfDone: () -> Unit = 
                             else -> {
                                 val top = router.stack.lastOrNull()
                                 if (top == null) {
-                                    HorizontalPager(state = pagerState) { page ->
-                                        when (page) {
-                                            0 -> HomeScreen(router,
-                                                goProfile = { scope.launch { pagerState.animateScrollToPage(2) } },
-                                                goSearch = { scope.launch { pagerState.animateScrollToPage(3) } })
-                                            1 -> BookshelfScreen(router)
-                                            2 -> ProfileScreen(router, account, library)
-                                            else -> SearchScreen(router, history)
+                                    CompositionLocalProvider(LocalNavigationClearance provides 80.dp) {
+                                        HorizontalPager(state = pagerState) { page ->
+                                            when (page) {
+                                                0 -> HomeScreen(router,
+                                                    goProfile = { scope.launch { pagerState.animateScrollToPage(2) } },
+                                                    goSearch = { scope.launch { pagerState.animateScrollToPage(3) } })
+                                                1 -> BookshelfScreen(router)
+                                                2 -> ProfileScreen(router, account, library)
+                                                else -> SearchScreen(router, history)
+                                            }
                                         }
                                     }
                                 } else {
@@ -133,7 +135,6 @@ fun JmApp(externalPdf: android.net.Uri? = null, onExternalPdfDone: () -> Unit = 
                             }
                         }
                     }
-                        if (showBottomBar) Spacer(Modifier.height(88.dp))
                     }
                 }
                 if (showBottomBar) {
@@ -144,7 +145,7 @@ fun JmApp(externalPdf: android.net.Uri? = null, onExternalPdfDone: () -> Unit = 
                             onSelect = { page -> scope.launch { pagerState.animateScrollToPage(page) } },
                             modifier = Modifier.align(Alignment.BottomCenter)
                                 .windowInsetsPadding(WindowInsets.navigationBars)
-                                .padding(horizontal = 20.dp, vertical = 12.dp),
+                                .padding(horizontal = 20.dp, vertical = 20.dp),
                         )
                 }
                 if (UpdateCheck.showPrompt) UpdatePromptDialog(context)

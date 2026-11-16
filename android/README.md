@@ -1,6 +1,6 @@
 # JM Reader for Android
 
-JM Reader 的 Android 版本（Kotlin + Jetpack Compose），与 iOS 版使用同一数据源，在同一仓库维护。本分支当前版本为 **2.30-glass.2**（versionCode **20**），已合并上游 v2.30（`871aed1`）；下方发布包仍为 `2.19-glass.4`。
+JM Reader 的 Android 版本（Kotlin + Jetpack Compose），与 iOS 版使用同一数据源，在同一仓库维护。本分支当前版本为 **2.30-glass.3**（versionCode **21**），已合并上游 v2.30（`871aed1`）；下方发布包仍为 `2.19-glass.4`。
 
 ## 安装
 
@@ -32,7 +32,7 @@ JM Reader 的 Android 版本（Kotlin + Jetpack Compose），与 iOS 版使用�
 
 - 第二个底栏入口改为「书架」，支持导入 CBZ / ZIP / PDF / EPUB / TXT、筛选、批量删除与最近阅读续看。Android 暂不支持 RAR；iOS 的 RAR 引擎随上游源码一并合入。
 - 本地漫画、PDF 与小说阅读器接入导航；小说支持目录、字号、滚动/翻页模式、EPUB 插图与页数提示，新增控件沿用全局玻璃和日夜配色。
-- 底栏独立占位，列表可完整滚到末尾；随机推荐改用多页随机池，同人推荐轮换页面。
+- 底栏浮于列表上方，滚动末尾预留空间使内容可完整滚出底栏；随机推荐改用多页随机池，同人推荐轮换页面。
 - 更新检查读取 `847832669/jmcomic-app` 的已发布 Release，支持 `glass` 版本比较，避免跳转上游安装包。
 - 本次未发布新安装包；构建与验证结果见 [同步记录](UPSTREAM_SYNC.md)。
 
@@ -68,16 +68,18 @@ gradle testDebugUnitTest assembleDebug
 
 入口：底部「个人」→ 右上角齿轮 →「外观」。默认跟随系统，选择日间或夜间后立即更新页面文字、背景和系统栏，并保存到本机；无需登录账号。
 
-底栏、工具栏、卡片、搜索与输入框、筛选标签、主要按钮、弹窗和阅读器控制区使用统一玻璃材质。底栏可点击或横向拖动切换页面，选中胶囊以弹簧动画跟随；文字与漫画原图保持清晰。
+工具栏、卡片、搜索与输入框、筛选标签、主要按钮、弹窗和阅读器控制区使用 QmDeve 玻璃材质。底栏采用参考酷安运行画面独立编写的专用材质，具体测量、证据和边界见 [底栏说明](COOLAPK_NAVIGATION.md)。底栏可点击或横向拖动切换页面，选中胶囊以弹簧动画跟随；文字与漫画原图保持清晰。
 
-使用 [QmDeve/AndroidLiquidGlassView](https://github.com/QmDeve/AndroidLiquidGlassView) 的实际 `LiquidGlassView` 组件，由 `:liquidglass` 源码模块提供。原 Java 组件与 AGSL 着色器保留，构建适配 SDK 35 / Java 17。来源版本、MIT 许可证和兼容修正见 [组件库说明](liquidglass/NOTICE.md)。
+通用表面使用 [QmDeve/AndroidLiquidGlassView](https://github.com/QmDeve/AndroidLiquidGlassView) 的实际 `LiquidGlassView` 组件，由 `:liquidglass` 源码模块提供。原 Java 组件与 AGSL 着色器保留，构建适配 SDK 35 / Java 17。来源版本、MIT 许可证和兼容修正见 [组件库说明](liquidglass/NOTICE.md)。
 
 - Android 13 / API 33 及以上：GPU 模糊、AGSL 边缘折射、色散与材质着色。
 - Android 8–12 / API 26–32：清晰、可操作的半透明表面。
 
-通过 Compose / View 适配层调用组件库的 `bind()`。卡片采样环境背景，浮动底栏采样页面内容；采样源与玻璃层分离，避免递归叠加。弹窗使用屏幕坐标对齐背景，每个组件仅录制自身范围。原 Kyant0 AGSL 与 CPU 渲染器已移除；保留已有图层采样和导航布局的历史授权声明。
+通过 Compose / View 适配层调用组件库的 `bind()`。卡片采样环境背景，浮动底栏独立采样页面内容（API 31–32 也支持模糊）；采样源与玻璃层分离，避免递归叠加。弹窗使用屏幕坐标对齐背景，每个组件仅录制自身范围。底栏的 NavigationGlass 为独立实现，API 33+ 使用专用 AGSL、API 31–32 使用模糊、API 26–30 使用半透明材质。原 Kyant0 AGSL 与 CPU 渲染器已移除；保留已有图层采样和导航布局的历史授权声明。
 
 ## 验证记录
+
+2026-11-16：`2.30-glass.3` 底栏已在 BSN-AN00 / API 37 对照酷安 16.7.3 测试日夜材质、背景变化、四个入口、底栏拖动和页面联动、列表末尾及历史入口；29 项 JVM 测试通过。低版本兼容分支本次未重新实机验证，见 [底栏说明](COOLAPK_NAVIGATION.md)。
 
 2026-11-13 的验证范围：
 

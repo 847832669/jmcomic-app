@@ -19,10 +19,16 @@ import androidx.compose.ui.unit.dp
 class GlassPreviewActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        Settings.init(this)
+        // Use an isolated Context so visual tests do not overwrite the user's theme.
+        Settings.init(object : android.content.ContextWrapper(this) {
+            override fun getSharedPreferences(name: String, mode: Int) =
+                super.getSharedPreferences("glass-fixture.$name", mode)
+        })
+        intent.getStringExtra("theme")?.let { Settings.updateThemeMode(it) }
         setContent {
             JmTheme {
                 val backdrop = rememberGlassBackdrop()
+                var chart by remember { mutableStateOf(false) }
                 var moved by remember { mutableStateOf(false) }
                 var selected by remember { mutableIntStateOf(0) }
                 var dialog by remember { mutableStateOf(false) }
@@ -34,7 +40,7 @@ class GlassPreviewActivity : ComponentActivity() {
                             val colors = listOf(Color(0xFFEB82B5), Color(0xFF719AE9), Color(0xFF77CDBE), Color(0xFFEBC383))
                             for (y in 0..(size.height / cell).toInt()) {
                                 for (x in -1..(size.width / cell).toInt()) {
-                                    drawRect(colors[(x + y + 8) % colors.size],
+                                    drawRect(if (chart) Color(0xFFF2F2F7) else colors[(x + y + 8) % colors.size],
                                         Offset(x * cell + if (moved) cell / 2 else 0f, y * cell), Size(cell, cell))
                                 }
                             }
@@ -47,6 +53,7 @@ class GlassPreviewActivity : ComponentActivity() {
                                     Text("清晰文字 · 背景折射 · 色散高光")
                                 }
                             }
+                            GlassButton(onClick = { chart = !chart } , modifier = Modifier.fillMaxWidth()) { Text("纯色背景") }
                             GlassButton(onClick = { moved = !moved }, modifier = Modifier.fillMaxWidth()) { Text("移动背景") }
                             GlassOutlinedButton(onClick = { dialog = true }, modifier = Modifier.fillMaxWidth()) { Text("测试弹窗") }
                         }

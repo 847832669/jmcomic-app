@@ -94,7 +94,7 @@ fun PagedGrid(loader: suspend (Int) -> List<JmApi.Album>, router: Router, key: A
         loading && items.isEmpty() -> LoadingBox()
         error != null && items.isEmpty() -> ErrorText(error!!) { error = null; scope.launch { load(1) } }
         else -> LazyVerticalGrid(GridCells.Fixed(3), state = gridState,
-            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 20.dp),
+            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 20.dp + LocalNavigationClearance.current),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
             items(shown, key = { it.id }) { AlbumCard(it, router) }
@@ -202,7 +202,7 @@ fun RecommendContent(router: Router) {
     when {
         sections == null && error == null -> LoadingBox()
         error != null -> ErrorText(error!!) { error = null; sections = null; reload++ }
-        else -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(top = 10.dp, bottom = 20.dp)) {
+        else -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(top = 10.dp, bottom = 20.dp + LocalNavigationClearance.current)) {
             sections?.forEach { (title, albums) ->
                 val shownAlbums = BlockTags.visible(albums)
                 if (shownAlbums.isNotEmpty()) {
@@ -317,6 +317,7 @@ fun SearchScreen(router: Router, history: HistoryStore) {
             Text("编号直达", fontWeight = FontWeight.Bold, fontSize = 14.sp,
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp))
             LazyVerticalGrid(GridCells.Fixed(3), modifier = Modifier.weight(1f).padding(horizontal = 14.dp),
+                contentPadding = PaddingValues(bottom = 20.dp + LocalNavigationClearance.current),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 item { AlbumCard(red, router) }
@@ -358,7 +359,7 @@ fun CategoriesScreen(router: Router) {
         cats == null && error == null -> LoadingBox()
         error != null -> ErrorText(error!!)
         else -> androidx.compose.foundation.lazy.LazyColumn(Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 20.dp)) {
+            contentPadding = PaddingValues(bottom = 20.dp + LocalNavigationClearance.current)) {
             items(cats!!.filter { it.slug.isNotEmpty() }, key = { it.slug }) { c ->
                 Row(Modifier.fillMaxWidth().clickable { router.push(CategoryDest(c.slug, c.name)) }
                     .padding(horizontal = 16.dp, vertical = 15.dp), verticalAlignment = Alignment.CenterVertically) {
