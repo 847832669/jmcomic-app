@@ -34,19 +34,20 @@ internal class QmGlassHost(context: Context) : FrameLayout(context) {
     }
 
     fun update(backdrop: GlassBackdrop, density: Density, direction: LayoutDirection,
-               radius: Float, red: Float, green: Float, blue: Float, alpha: Float,
-               prominent: Boolean) {
+               radius: Float, red: Float, green: Float, blue: Float, alpha: Float) {
         source.backdrop = backdrop
         source.density = density
         source.direction = direction
-        val values = listOf(radius, red, green, blue, alpha, density.density, if (prominent) 1f else 0f)
+        val values = listOf(radius, red, green, blue, alpha, density.density)
         if (parameters == values) return
         parameters = values
         glass.setCornerRadius(radius)
-        glass.setRefractionHeight((if (prominent) 20f else 14f) * density.density)
-        glass.setRefractionOffset((if (prominent) 42f else 24f) * density.density)
-        glass.setDispersion(if (prominent) 0.22f else 0.12f)
-        glass.setBlurRadius((if (prominent) 5f else 7f) * density.density)
+        // Keep the library's default optics. Only geometry and theme tint vary by surface.
+        // Height and offset use pixels; blur is the library's raw pixel value, not dp.
+        glass.setRefractionHeight(20f * density.density)
+        glass.setRefractionOffset(70f * density.density)
+        glass.setDispersion(0.5f)
+        glass.setBlurRadius(0.01f)
         glass.setTintColorRed(red)
         glass.setTintColorGreen(green)
         glass.setTintColorBlue(blue)

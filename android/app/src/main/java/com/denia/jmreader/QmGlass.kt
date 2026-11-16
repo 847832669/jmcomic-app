@@ -18,11 +18,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.*
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -85,7 +83,7 @@ fun GlassWallpaper(modifier: Modifier = Modifier) {
     }
 }
 
-/** Shared QmDeve surfaces below sharp Compose content. Navigation has its own material. */
+/** The same upstream LiquidGlassView material under every surface and navigation lens. */
 @Composable
 fun GlassSurface(
     modifier: Modifier = Modifier,
@@ -103,7 +101,7 @@ fun GlassSurface(
     val density = LocalDensity.current
     val direction = LocalLayoutDirection.current
     val accent = color != MaterialTheme.colorScheme.surface
-    val alpha = (tintStrength ?: if (accent) 0.78f else if (prominent) 0.25f else 0.48f) * color.alpha
+    val alpha = (tintStrength ?: if (accent) 0.72f else if (dark) 0.22f else 0.12f) * color.alpha
     val native = Build.VERSION.SDK_INT >= 33 && backdrop != null
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
@@ -128,20 +126,12 @@ fun GlassSurface(
             // The selected library has no shader support below API 33. Keep controls legible.
             if (!native) drawRect(color.copy(alpha = if (accent) 0.9f else if (dark) 0.9f else 0.84f))
             drawContent()
-            val inset = 0.5.dp.toPx()
-            drawRoundRect(Brush.linearGradient(listOf(
-                Color.White.copy(alpha = if (dark) 0.3f else 0.78f), Color.White.copy(alpha = 0.06f),
-                Color.White.copy(alpha = if (dark) 0.18f else 0.45f)),
-                start = Offset.Zero, end = Offset(size.width, size.height)),
-                topLeft = Offset(inset, inset), size = Size((size.width - inset * 2).coerceAtLeast(0f),
-                    (size.height - inset * 2).coerceAtLeast(0f)),
-                cornerRadius = CornerRadius((actualRadius - inset).coerceAtLeast(0f)), style = Stroke(1.dp.toPx()))
         }, propagateMinConstraints = true) {
         if (native) {
             AndroidView(factory = { QmGlassHost(it) }, modifier = Modifier.matchParentSize(),
                 onRelease = { it.release() }, update = {
                     it.update(backdrop!!, density, direction, actualRadius,
-                        color.red, color.green, color.blue, alpha, prominent)
+                        color.red, color.green, color.blue, alpha)
                 })
         }
         content()
