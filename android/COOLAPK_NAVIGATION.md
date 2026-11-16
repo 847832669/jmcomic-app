@@ -9,7 +9,7 @@
 - REA + JADX headless 0.7.1：包名 `com.coolapk.market`，版本 `16.7.3` / `2611121`，minSdk 24、targetSdk 34。设备原装 16.7.2，已用提供的 APK 覆盖升级并核实版本，保留原数据；最终对照使用 16.7.3。
 - 真机：BSN-AN00，API 37，1280 × 2788，显示 density 476，font_scale 0.85。系统夜间模式测试后恢复原来的 auto，JM Reader 的外观恢复测试前的日间设置。
 
-REA 静态分析只能得到 31 个类，主要属于 `com.netease.nis.wrapper`，表明存在网易保护壳。没有获取其底栏内部方法、实际着色器、完整依赖版本或动画参数，不能把效果复刻描述为源码还原。
+REA 静态分析只能得到 31 个类，主要属于 `com.netease.nis.wrapper`，表明存在网易保护壳。没有恢复其底栏内部方法、完整依赖版本和实际运行参数，不能把效果复刻描述为源码还原。
 
 包内存在 `META-INF/Glass:backdrop.kotlin_module`、`liquidglass.kotlin_module` 和 `liquidglass-coolapk.kotlin_module`。这些是打包模块标记，不能仅凭名字证明具体开源版本。资源中有 `liquid_glass_capability_name/value` 的 full / blur_only / fallback 三档，`liquid_home_structure_demo` 使用 ComposeView，`liquid_bottom_navigation_height` 为 56dp。这些属于静态声明，不证明每个分支在该设备上执行。
 
@@ -23,6 +23,8 @@ REA 静态分析只能得到 31 个类，主要属于 `com.netease.nis.wrapper`�
 | 已安装 16.7.3 版本核实 | `ev_d40880501e95604dea90db339bc3da594be8d5e5e73ff88059e3999d39a747da` |
 | 16.7.3 日间截图 | `ev_435ce887d735df4e470df2d284bd339637d2ec0ff19c2cad8cdefff0a132c4dd` |
 | 16.7.3 夜间截图 | `ev_8a33238c0e9cffe8e122bf20927cf9ee2fe64f293912cf03d5e29ac92075859f` |
+
+补充的普通字节检索在受保护 DEX 的尾部发现了 AGSL 明文字符串：一个渐隐 shader，以及普通折射、带色散折射两个变体。折射字符串使用圆弧映射控制边缘采样，色散变体组合七次颜色采样；还保留了 `LiquidBottomNavigationBar.kt`、`CoolapkGlassNavigationBar.kt` 等源码标记。字符串存在不证明底栏实际调用了哪个变体，也未给出其运行参数。本项目没有直接复制这些闭源字符串。
 
 资源尺寸和 XML 节点另用 Android SDK aapt2 交叉检查；像素与触控区域测量来自截图和 uiautomator，属于普通工具观察，未冒充 REA 反编译结果。完整原始证据仅保存在本地研究目录，未把用户设备标识或账号页面上传仓库。
 
