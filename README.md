@@ -71,4 +71,4 @@
 
 ## 版本历史
 
-见 [CHANGELOG.md](CHANGELOG.md)。Android `2.19-glass.*` 条目记录本分支增强，其余条目保留上游版本历史。
+见 [CHANGELOG.md](CHANGELOG.md)。Android `*-glass.*` 条目记录本分支增强，其余条目保留上游版本历史。
