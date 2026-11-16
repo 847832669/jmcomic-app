@@ -94,6 +94,7 @@ fun GlassSurface(
     radius: Dp = 20.dp,
     prominent: Boolean = false,
     tintStrength: Float? = null,
+    blurRadius: Dp = 0.dp,
     onClick: (() -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
@@ -124,14 +125,16 @@ fun GlassSurface(
         .onSizeChanged { panelSize = it }
         .drawWithContent {
             // The selected library has no shader support below API 33. Keep controls legible.
-            if (!native) drawRect(color.copy(alpha = if (accent) 0.9f else if (dark) 0.9f else 0.84f))
+            if (!native) drawRect(color.copy(alpha = if (tintStrength != null) alpha
+                else if (accent) 0.9f else if (dark) 0.9f else 0.84f))
             drawContent()
         }, propagateMinConstraints = true) {
         if (native) {
             AndroidView(factory = { QmGlassHost(it) }, modifier = Modifier.matchParentSize(),
                 onRelease = { it.release() }, update = {
                     it.update(backdrop!!, density, direction, actualRadius,
-                        color.red, color.green, color.blue, alpha)
+                        color.red, color.green, color.blue, alpha,
+                        with(density) { blurRadius.toPx() }.coerceAtLeast(0.01f))
                 })
         }
         content()
