@@ -107,7 +107,8 @@ fun IosCard(modifier: Modifier = Modifier, radius: androidx.compose.ui.unit.Dp =
 sealed interface Dest
 data class DetailDest(val id: String) : Dest
 data class CommentsDest(val id: String, val title: String) : Dest
-data class ReaderDest(val chapterId: String, val albumTitle: String, val albumId: String = "", val startPage: Int = 0) : Dest
+data class ReaderDest(val chapterId: String, val albumTitle: String, val albumId: String = "",
+                      val startPage: Int? = null, val startOffset: Int? = null) : Dest
 data class LocalComicDest(val bookId: String) : Dest
 data class LocalNovelDest(val bookId: String) : Dest
 data class PdfDest(val path: String) : Dest
@@ -118,6 +119,7 @@ object BlockedTagsDest : Dest
 object StorageDest : Dest
 object SettingsDest : Dest
 object LinesDest : Dest
+object BrowseHistoryDest : Dest
 
 class Router {
     val stack = mutableStateListOf<Dest>()

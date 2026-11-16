@@ -143,6 +143,17 @@ fun ProfileScreen(router: Router, account: AccountStore, library: LibraryStore) 
         }
 
         ReadingStatsCard()
+        IosCard(modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            onClick = { router.push(BrowseHistoryDest) }) {
+            Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("本地浏览历史", fontWeight = FontWeight.Bold)
+                    Text("${BrowseHistory.entries.size} 本 · 无需登录，点击查看与续读", fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Text("›", color = Pink)
+            }
+        }
         Spacer(Modifier.height(18.dp))
         FavoritesSection(router, account, library, loggedIn, onCloudTotal = { stats = account.stats })
     }
@@ -551,7 +562,8 @@ fun FavoritesSection(router: Router, account: AccountStore, library: LibraryStor
 // ---------------- Detail ----------------
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun DetailScreen(dest: DetailDest, router: Router, account: AccountStore, library: LibraryStore) {
+fun DetailScreen(dest: DetailDest, router: Router, account: AccountStore, library: LibraryStore,
+                 loadAlbum: suspend (String) -> JSONObject = { JmApi.album(it) }) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     var detail by remember { mutableStateOf<JSONObject?>(null) }
@@ -564,7 +576,7 @@ fun DetailScreen(dest: DetailDest, router: Router, account: AccountStore, librar
 
     LaunchedEffect(dest.id) {
         try {
-            val dd = JmApi.album(dest.id)
+            val dd = loadAlbum(dest.id)
             detail = dd
             val t = dd.optJSONArray("tags")
             val tl = mutableListOf<String>()
@@ -574,6 +586,7 @@ fun DetailScreen(dest: DetailDest, router: Router, account: AccountStore, librar
             if (aa is org.json.JSONArray) for (i in 0 until aa.length()) al.add(aa.optString(i))
             else if (aa is String && aa.isNotEmpty()) al.add(aa)
             BlockTags.remember(dest.id, tl, al)
+            BrowseHistory.visit(dest.id, dd.optString("name"), al.joinToString(" / "))
             if (account.isLoggedIn) {
                 val cf = dd.optInt("is_favorite") != 0
                 if (cf) RemovedFavs.clear(dest.id)
@@ -597,6 +610,7 @@ fun DetailScreen(dest: DetailDest, router: Router, account: AccountStore, librar
                 val tags = mutableListOf<String>()
                 val t = d.optJSONArray("tags"); if (t != null) for (i in 0 until t.length()) tags.add(t.optString(i))
                 val chapters = parseSeries(d, dest.id)
+                val lastRead = ReadHistory.resume(dest.id, chapters.map { it.first })
                 val albumModel = JmApi.Album(dest.id, name, authors.joinToString(" / "), tags, d.optString("total_views"), d.optString("likes"))
                 Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
                     Row {
@@ -645,10 +659,15 @@ fun DetailScreen(dest: DetailDest, router: Router, account: AccountStore, librar
                     AlbumDescription(d.optString("description").takeUnless { it == "null" } ?: "")
                     Spacer(Modifier.height(16.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        GlassButton(onClick = { if (chapters.isNotEmpty()) router.push(ReaderDest(chapters.first().first, name, dest.id)) },
+                        GlassButton(onClick = {
+                            val cid = lastRead?.chapterId ?: chapters.firstOrNull()?.first
+                            if (cid != null) router.push(ReaderDest(cid, name, dest.id))
+                        },
                             modifier = Modifier.weight(1f),
                             shape = RoundedCornerShape(14.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = Pink)) { Text("开始阅读", color = Color.White) }
+                            colors = ButtonDefaults.buttonColors(containerColor = Pink)) {
+                            Text(if (lastRead == null) "开始阅读" else "继续阅读", color = Color.White)
+                        }
                         GlassOutlinedButton(onClick = {
                             if (fav && account.isLoggedIn) {
                                 scope.launch {
@@ -677,6 +696,16 @@ fun DetailScreen(dest: DetailDest, router: Router, account: AccountStore, librar
                                 toast = "已收藏"
                             }
                         }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(14.dp)) { Text(if (fav) "已收藏" else "收藏", color = Pink) }
+                    }
+                    if (lastRead != null) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text("上次读到 ${chapters.firstOrNull { it.first == lastRead.chapterId }?.second.orEmpty()} · 第 ${lastRead.page + 1} 页",
+                                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.weight(1f))
+                            TextButton(onClick = {
+                                chapters.firstOrNull()?.let { router.push(ReaderDest(it.first, name, dest.id, 0, 0)) }
+                            }) { Text("从头阅读", fontSize = 12.sp) }
+                        }
                     }
                     Spacer(Modifier.height(8.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {

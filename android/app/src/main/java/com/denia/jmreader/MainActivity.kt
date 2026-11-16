@@ -63,7 +63,7 @@ fun JmApp(externalPdf: android.net.Uri? = null, onExternalPdfDone: () -> Unit = 
     val history = remember { HistoryStore(context) }
     remember { BlockTags.init(context); ReadingStats.init(context); RemovedFavs.init(context) }
     remember { Lines.init(context) }
-    remember { Settings.init(context); LocalBooks.init(context); ReadHistory.init(context) }
+    remember { Settings.init(context); LocalBooks.init(context); ReadHistory.init(context); BrowseHistory.init(context) }
     remember { FolderRegistry.init(context) }
     LaunchedEffect(Unit) {
         JmApi.imgHost = Lines.currentImgHost()
@@ -118,6 +118,7 @@ fun JmApp(externalPdf: android.net.Uri? = null, onExternalPdfDone: () -> Unit = 
                                                 scope.launch { pagerState.animateScrollToPage(2) }
                                             })
                                         is ReaderDest -> ReaderScreen(top, router)
+                                        BrowseHistoryDest -> BrowseHistoryScreen(router)
                                         is LocalComicDest, is LocalNovelDest -> LocalReaderHost(top, router)
                                         is PdfDest -> PdfViewerScreen(java.io.File(top.path)) { router.pop() }
                                         is AuthorDest -> AuthorScreen(top, router)
