@@ -29,6 +29,9 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -44,6 +47,7 @@ fun LiquidGlassBottomBar(selectedPage: Int, pagePosition: Float, backdrop: Glass
                          onSelect: (Int) -> Unit, modifier: Modifier = Modifier) {
     val items = remember { listOf("首页" to Icons.Default.Home, "书架" to Icons.Default.MenuBook,
         "个人" to Icons.Default.Person, "搜索" to Icons.Default.Search) }
+    val tabInteractions = remember { List(4) { MutableInteractionSource() } }
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
     val density = LocalDensity.current
     val insetPx = with(density) { 4.dp.toPx() }
@@ -125,32 +129,17 @@ fun LiquidGlassBottomBar(selectedPage: Int, pagePosition: Float, backdrop: Glass
     }) {
         BoxWithConstraints(Modifier.fillMaxSize().graphicsLayer { translationX = barShift }) {
             val barWidth = maxWidth
-            // Record only the page plus the library's frosted bar, before the lens or labels.
+            // Record the page, frosted bar and live tab foreground before the top lens.
             // Extra sampling space preserves page content around the enlarged capsule.
             Box(Modifier.requiredSize(barWidth + 56.dp, 112.dp).align(Alignment.Center)
                 .clipToBounds().glassBackdrop(frostedBackdrop, background = backdrop)) {
                 GlassSurface(Modifier.width(barWidth).height(56.dp).align(Alignment.Center),
                     shape = CircleShape, radius = 28.dp, backdrop = backdrop,
                     prominent = true, tintStrength = 0.5f, blurRadius = 12.dp) {}
-            }
-            BoxWithConstraints(Modifier.fillMaxSize().padding(4.dp)) {
-                val tabWidth = maxWidth / 4
-                val lensWidth = tabWidth * (1f + 0.24f * pressProgress)
-                val lensHeight = 48.dp + 32.dp * pressProgress
-                // Resize the native component instead of scaling its pixels so its sampling
-                // coordinates and corner radius remain correct while crossing the bar edges.
-                GlassSurface(Modifier.offset(x = tabWidth * position + (tabWidth - lensWidth) / 2,
-                    y = (48.dp - lensHeight) / 2)
-                    .wrapContentSize(Alignment.TopStart, unbounded = true).size(lensWidth, lensHeight),
-                    shape = CircleShape, radius = lensHeight / 2, backdrop = frostedBackdrop,
-                    // At 80dp the bar's edges sit 12dp inside the lens, in its clear core.
-                    // Keep the entire native optical material, with a stronger dispersive
-                    // rim around that undistorted view of the real frosted bar.
-                    tintStrength = 0f, refractionHeight = 12.dp,
-                    refractionOffset = 45.dp, dispersion = 1f) {}
-                Row(Modifier.fillMaxSize().selectableGroup()) {
+                Row(Modifier.width(barWidth).height(56.dp).align(Alignment.Center)
+                    .padding(4.dp).clearAndSetSemantics {}) {
                     items.forEachIndexed { index, (label, icon) ->
-                        val interaction = remember { MutableInteractionSource() }
+                        val interaction = tabInteractions[index]
                         val down by interaction.collectIsPressedAsState()
                         val scale by animateFloatAsState(if (down) 0.94f else 1f,
                             spring(0.8f, 600f), label = "navigationPress")
@@ -158,8 +147,6 @@ fun LiquidGlassBottomBar(selectedPage: Int, pagePosition: Float, backdrop: Glass
                         val tint by animateColorAsState(if (active) MaterialTheme.colorScheme.primary
                             else if (dark) Color.White else Color.Black, label = "navigationTint")
                         Column(Modifier.weight(1f).fillMaxHeight()
-                            .selectable(selectedPage == index, role = Role.Tab, interactionSource = interaction,
-                                indication = null, onClick = { releasedPage = null; onSelect(index) })
                             .graphicsLayer { scaleX = scale; scaleY = scale },
                             horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                             Icon(icon, null, tint = tint, modifier = Modifier.size(24.dp))
@@ -168,6 +155,30 @@ fun LiquidGlassBottomBar(selectedPage: Int, pagePosition: Float, backdrop: Glass
                                 fontWeight = if (active) FontWeight.Bold else FontWeight.Normal, maxLines = 1)
                         }
                     }
+                }
+            }
+            BoxWithConstraints(Modifier.fillMaxSize().padding(4.dp)) {
+                val tabWidth = maxWidth / 4
+                val lensWidth = tabWidth * (1f + 0.18f * pressProgress)
+                val lensHeight = 48.dp + 24.dp * pressProgress
+                // Keep the actual native component above the icons. Its bind source includes
+                // their live rendering, so refraction and dispersion affect them as it moves.
+                GlassSurface(Modifier.offset(x = tabWidth * position + (tabWidth - lensWidth) / 2,
+                    y = (48.dp - lensHeight) / 2)
+                    .wrapContentSize(Alignment.TopStart, unbounded = true).size(lensWidth, lensHeight),
+                    shape = CircleShape, radius = lensHeight / 2, backdrop = frostedBackdrop,
+                    tintStrength = 0f, refractionHeight = 12.dp,
+                    refractionOffset = 45.dp, dispersion = 1f) {}
+            }
+            // Invisible input/semantics stay above the native view so the selected tab
+            // remains accessible. Nothing is painted above the optical lens.
+            Row(Modifier.fillMaxSize().padding(4.dp).selectableGroup()) {
+                items.forEachIndexed { index, (label, _) ->
+                    Box(Modifier.weight(1f).fillMaxHeight()
+                        .semantics { contentDescription = label }
+                        .selectable(selectedPage == index, role = Role.Tab,
+                            interactionSource = tabInteractions[index], indication = null,
+                            onClick = { releasedPage = null; onSelect(index) }))
                 }
             }
         }
