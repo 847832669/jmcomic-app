@@ -50,6 +50,8 @@ fun LiquidGlassBottomBar(selectedPage: Int, pagePosition: Float, backdrop: Glass
     val tabInteractions = remember { List(4) { MutableInteractionSource() } }
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
     val density = LocalDensity.current
+    val barHeight = 64.dp
+    val restingLensHeight = barHeight - 8.dp
     val insetPx = with(density) { 4.dp.toPx() }
     val maxShiftPx = with(density) { 6.dp.toPx() }
     val frostedBackdrop = rememberGlassBackdrop()
@@ -78,11 +80,23 @@ fun LiquidGlassBottomBar(selectedPage: Int, pagePosition: Float, backdrop: Glass
         spring(0.8f, 600f), label = "navigationLens")
     val barShift by animateFloatAsState(shiftTarget,
         spring(0.85f, 450f), label = "navigationShift")
+    val refractIcons = touching || abs(position - selectedPage) > 0.01f
+    val iconOpticalProgress by animateFloatAsState(if (refractIcons) 1f else 0f,
+        spring(1f, 600f), label = "navigationIconOptics")
+    val tabAppearance = items.mapIndexed { index, _ ->
+        val down by tabInteractions[index].collectIsPressedAsState()
+        val scale by animateFloatAsState(if (down) 0.94f else 1f,
+            spring(0.8f, 600f), label = "navigationPress")
+        val active = if (dragging != null) abs(position - index) < 0.5f else selectedPage == index
+        val tint by animateColorAsState(if (active) MaterialTheme.colorScheme.primary
+            else if (dark) Color.White else Color.Black, label = "navigationTint")
+        tint to scale
+    }
     val latestSelect by rememberUpdatedState(onSelect)
     val latestPosition by rememberUpdatedState(target)
     val latestShift by rememberUpdatedState(barShift)
     // Keep hit coordinates fixed while the rendered bar moves slightly under the finger.
-    Box(modifier.fillMaxWidth().height(56.dp).pointerInput(insetPx, maxShiftPx) {
+    Box(modifier.fillMaxWidth().height(barHeight).pointerInput(insetPx, maxShiftPx) {
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
             val tabWidth = ((size.width - insetPx * 2) / 4f).coerceAtLeast(1f)
@@ -129,30 +143,25 @@ fun LiquidGlassBottomBar(selectedPage: Int, pagePosition: Float, backdrop: Glass
     }) {
         BoxWithConstraints(Modifier.fillMaxSize().graphicsLayer { translationX = barShift }) {
             val barWidth = maxWidth
-            // Record the page, frosted bar and live tab foreground before the top lens.
+            // Record the page, frosted bar and icons before the top lens. Labels are
+            // painted separately so optical displacement cannot duplicate their glyphs.
             // Extra sampling space preserves page content around the enlarged capsule.
-            Box(Modifier.requiredSize(barWidth + 56.dp, 112.dp).align(Alignment.Center)
+            Box(Modifier.requiredSize(barWidth + 56.dp, barHeight + 56.dp).align(Alignment.Center)
                 .clipToBounds().glassBackdrop(frostedBackdrop, background = backdrop)) {
-                GlassSurface(Modifier.width(barWidth).height(56.dp).align(Alignment.Center),
-                    shape = CircleShape, radius = 28.dp, backdrop = backdrop,
+                GlassSurface(Modifier.width(barWidth).height(barHeight).align(Alignment.Center),
+                    shape = CircleShape, radius = barHeight / 2, backdrop = backdrop,
                     prominent = true, tintStrength = 0.5f, blurRadius = 12.dp) {}
-                Row(Modifier.width(barWidth).height(56.dp).align(Alignment.Center)
+                Row(Modifier.width(barWidth).height(barHeight).align(Alignment.Center)
                     .padding(4.dp).clearAndSetSemantics {}) {
-                    items.forEachIndexed { index, (label, icon) ->
-                        val interaction = tabInteractions[index]
-                        val down by interaction.collectIsPressedAsState()
-                        val scale by animateFloatAsState(if (down) 0.94f else 1f,
-                            spring(0.8f, 600f), label = "navigationPress")
-                        val active = if (dragging != null) abs(position - index) < 0.5f else selectedPage == index
-                        val tint by animateColorAsState(if (active) MaterialTheme.colorScheme.primary
-                            else if (dark) Color.White else Color.Black, label = "navigationTint")
+                    items.forEachIndexed { index, (_, icon) ->
+                        val (tint, scale) = tabAppearance[index]
                         Column(Modifier.weight(1f).fillMaxHeight()
-                            .graphicsLayer { scaleX = scale; scaleY = scale },
+                            .graphicsLayer { scaleX = scale; scaleY = scale; alpha = iconOpticalProgress },
                             horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                             Icon(icon, null, tint = tint, modifier = Modifier.size(24.dp))
                             Spacer(Modifier.height(2.dp))
-                            Text(label, color = tint, fontSize = 10.sp, lineHeight = 12.sp,
-                                fontWeight = if (active) FontWeight.Bold else FontWeight.Normal, maxLines = 1)
+                            // Match the actual label's scaled line height in the foreground.
+                            Spacer(Modifier.height(with(density) { 12.sp.toDp() }))
                         }
                     }
                 }
@@ -160,25 +169,38 @@ fun LiquidGlassBottomBar(selectedPage: Int, pagePosition: Float, backdrop: Glass
             BoxWithConstraints(Modifier.fillMaxSize().padding(4.dp)) {
                 val tabWidth = maxWidth / 4
                 val lensWidth = tabWidth * (1f + 0.18f * pressProgress)
-                val lensHeight = 48.dp + 24.dp * pressProgress
-                // Keep the actual native component above the icons. Its bind source includes
-                // their live rendering, so refraction and dispersion affect them as it moves.
+                val lensHeight = restingLensHeight + (72.dp - restingLensHeight) * pressProgress
+                // Respect the library's minimum 12dp height and 20dp offset. Resting
+                // icons are drawn in the foreground rather than being bent by this rim.
                 GlassSurface(Modifier.offset(x = tabWidth * position + (tabWidth - lensWidth) / 2,
-                    y = (48.dp - lensHeight) / 2)
+                    y = (restingLensHeight - lensHeight) / 2)
                     .wrapContentSize(Alignment.TopStart, unbounded = true).size(lensWidth, lensHeight),
                     shape = CircleShape, radius = lensHeight / 2, backdrop = frostedBackdrop,
                     tintStrength = 0f, refractionHeight = 12.dp,
-                    refractionOffset = 45.dp, dispersion = 1f) {}
+                    refractionOffset = 20.dp + 25.dp * pressProgress,
+                    dispersion = 0.15f + 0.85f * pressProgress) {}
             }
-            // Invisible input/semantics stay above the native view so the selected tab
-            // remains accessible. Nothing is painted above the optical lens.
+            // Labels stay sharp above the optics in every gesture state. Their input
+            // and semantics share the same fixed hit areas as the underlying icons.
             Row(Modifier.fillMaxSize().padding(4.dp).selectableGroup()) {
-                items.forEachIndexed { index, (label, _) ->
+                items.forEachIndexed { index, (label, icon) ->
+                    val (tint, scale) = tabAppearance[index]
+                    val active = if (dragging != null) abs(position - index) < 0.5f else selectedPage == index
                     Box(Modifier.weight(1f).fillMaxHeight()
                         .semantics { contentDescription = label }
                         .selectable(selectedPage == index, role = Role.Tab,
                             interactionSource = tabInteractions[index], indication = null,
-                            onClick = { releasedPage = null; onSelect(index) }))
+                            onClick = { releasedPage = null; onSelect(index) }),
+                        contentAlignment = Alignment.Center) {
+                        Column(Modifier.graphicsLayer { scaleX = scale; scaleY = scale }
+                            .clearAndSetSemantics {}, horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(icon, null, tint = tint, modifier = Modifier.size(24.dp)
+                                .graphicsLayer { alpha = 1f - iconOpticalProgress })
+                            Spacer(Modifier.height(2.dp))
+                            Text(label, color = tint, fontSize = 10.sp, lineHeight = 12.sp,
+                                fontWeight = if (active) FontWeight.Bold else FontWeight.Normal, maxLines = 1)
+                        }
+                    }
                 }
             }
         }

@@ -9,7 +9,7 @@
 
 ## 当前分支
 
-本仓库是 [denia-dev/jmcomic-app](https://github.com/denia-dev/jmcomic-app) 的个人分支，已合并上游 v2.30（`871aed1`）。当前 Android 源码版本为 **2.30-glass.6**（versionCode **24**），新增日夜主题、QmDeve 全局液态玻璃、液态玻璃悬浮底栏、作品描述、按需评论、评论关键词屏蔽、漫画续读与本地浏览历史；这些分支增强仅针对 Android。
+本仓库是 [denia-dev/jmcomic-app](https://github.com/denia-dev/jmcomic-app) 的个人分支，已合并上游 v2.30（`871aed1`）。当前 Android 源码版本为 **2.30-glass.7**（versionCode **25**），新增日夜主题、QmDeve 全局液态玻璃、液态玻璃悬浮底栏、作品描述、按需评论、评论关键词屏蔽、漫画续读与本地浏览历史；这些分支增强仅针对 Android。
 
 - [Android 安装、功能与构建说明](android/README.md)
 - [描述、评论接口与真机验证记录](android/COMMUNITY.md)
@@ -39,7 +39,7 @@
 
 - **日间 / 夜间 / 跟随系统**：个人 → 右上角齿轮 → 外观，切换立即生效，重启保留。
 - **全局液态玻璃**：使用 [QmDeve/AndroidLiquidGlassView](https://github.com/QmDeve/AndroidLiquidGlassView) 的实际组件；API 33 及以上支持 GPU 模糊、边缘折射和色散，API 26–32 使用半透明表面。
-- **液态玻璃底栏**：56dp 悬浮胶囊与移动选中透镜，直接使用 QmDeve 原版折射和色散，支持点击与拖动；列表可从玻璃下方滚过，末尾保留安全留白。参数与适配见 [底栏说明](android/LIQUID_GLASS.md)。
+- **液态玻璃底栏**：64dp 悬浮底栏与移动选中透镜，直接使用 QmDeve 原版折射和色散，静止图标保持清晰、文字始终独立清晰绘制，支持按压放大与跟手拖动；列表可从玻璃下方滚过，末尾保留安全留白。参数与适配见 [底栏说明](android/LIQUID_GLASS.md)。
 - **作品详情**：长描述可展开、收起和复制；标签下方用胶囊展示浏览量与更新时间。更新时间按 Venera 图源使用接口的 `addtime` 字段。
 - **按需评论**：点击「下载」右侧的「评论」才加载，滑动接近底部自动续载；支持刷新、失败重试及登录后发表评论，发送失败保留草稿。
 - **评论关键词屏蔽**：在设置中添加或删除关键词，忽略英文大小写，命中正文的评论及其回复分支自动隐藏；名单保存在本机，连续整页被屏蔽仍继续加载后续页。

@@ -99,7 +99,7 @@ fun JmApp(externalPdf: android.net.Uri? = null, onExternalPdfDone: () -> Unit = 
                             else -> {
                                 val top = router.stack.lastOrNull()
                                 if (top == null) {
-                                    CompositionLocalProvider(LocalNavigationClearance provides 80.dp) {
+                                    CompositionLocalProvider(LocalNavigationClearance provides 88.dp) {
                                         HorizontalPager(state = pagerState) { page ->
                                             when (page) {
                                                 0 -> HomeScreen(router,
