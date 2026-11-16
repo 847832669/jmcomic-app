@@ -1,28 +1,17 @@
 package com.denia.jmreader
 
 import android.os.Build
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.MenuBook
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -36,14 +25,12 @@ import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.*
 import androidx.compose.ui.viewinterop.AndroidView
 import kotlin.math.roundToInt
@@ -98,7 +85,7 @@ fun GlassWallpaper(modifier: Modifier = Modifier) {
     }
 }
 
-/** All application glass surfaces use the QmDeve library, below sharp Compose content. */
+/** Shared QmDeve surfaces below sharp Compose content. Navigation has its own material. */
 @Composable
 fun GlassSurface(
     modifier: Modifier = Modifier,
@@ -158,63 +145,5 @@ fun GlassSurface(
                 })
         }
         content()
-    }
-}
-
-/** Floating navigation with the same native glass material as the rest of the app. */
-@Composable
-fun LiquidGlassBottomBar(selectedPage: Int, pagePosition: Float, backdrop: GlassBackdrop,
-                         onSelect: (Int) -> Unit, modifier: Modifier = Modifier) {
-    val items = listOf("首页" to Icons.Default.Home, "书架" to Icons.Default.MenuBook,
-        "个人" to Icons.Default.Person, "搜索" to Icons.Default.Search)
-    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
-    var dragging by remember { mutableStateOf<Float?>(null) }
-    val target = pagePosition.coerceIn(0f, 3f)
-    val position by animateFloatAsState(dragging ?: target, spring(0.72f, 420f), label = "liquidSelection")
-    val latestSelect by rememberUpdatedState(onSelect)
-    val latestPosition by rememberUpdatedState(target)
-    GlassSurface(modifier.fillMaxWidth().height(64.dp), shape = RoundedCornerShape(32.dp),
-        radius = 32.dp, backdrop = backdrop, prominent = true) {
-        BoxWithConstraints(Modifier.fillMaxSize().padding(4.dp).pointerInput(Unit) {
-            detectHorizontalDragGestures(
-                onDragStart = { dragging = latestPosition },
-                onDragCancel = { dragging = null },
-                onDragEnd = {
-                    dragging?.let { latestSelect(it.roundToInt().coerceIn(0, 3)) }
-                    dragging = null
-                },
-            ) { change, amount ->
-                change.consume()
-                dragging = ((dragging ?: latestPosition) + amount / (size.width / 4f)).coerceIn(0f, 3f)
-            }
-        }) {
-            val tabWidth = maxWidth / 4
-            GlassSurface(Modifier.offset(x = tabWidth * position).width(tabWidth).fillMaxHeight()
-                .drawWithContent {
-                    drawContent()
-                    drawRoundRect(if (dark) Color.White.copy(alpha = 0.12f) else Color.White.copy(alpha = 0.18f),
-                        cornerRadius = CornerRadius(size.height / 2))
-                }, shape = RoundedCornerShape(28.dp), radius = 28.dp, backdrop = backdrop,
-                prominent = true, tintStrength = if (dark) 0.2f else 0.12f) {}
-            Row(Modifier.fillMaxSize().selectableGroup()) {
-                items.forEachIndexed { index, (label, icon) ->
-                    val interaction = remember { MutableInteractionSource() }
-                    val down by interaction.collectIsPressedAsState()
-                    val scale by animateFloatAsState(if (down) 1.15f else 1f,
-                        spring(0.65f, 500f), label = "tabPress")
-                    val tint by animateColorAsState(if (selectedPage == index) Pink else MaterialTheme.colorScheme.onSurface,
-                        label = "tabTint")
-                    Column(Modifier.weight(1f).fillMaxHeight()
-                        .selectable(selectedPage == index, role = Role.Tab, interactionSource = interaction,
-                            indication = null, onClick = { onSelect(index) })
-                        .graphicsLayer { scaleX = scale; scaleY = scale },
-                        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(23.dp))
-                        Spacer(Modifier.height(2.dp))
-                        Text(label, color = tint, fontSize = 10.sp, lineHeight = 12.sp)
-                    }
-                }
-            }
-        }
     }
 }

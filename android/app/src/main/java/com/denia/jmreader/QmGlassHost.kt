@@ -64,7 +64,7 @@ internal class QmGlassHost(context: Context) : FrameLayout(context) {
 /** Adapts a recorded Compose background to the ViewGroup expected by bind().
  * Each source has the glass size, so the library records only that panel's crop.
  * Screen coordinates work for both the activity and separate dialog windows. */
-private class ComposeGlassSource(context: Context) : ViewGroup(context) {
+internal class ComposeGlassSource(context: Context) : ViewGroup(context) {
     var backdrop: GlassBackdrop? = null
     var density: Density = Density(context.resources.displayMetrics.density)
     var direction = LayoutDirection.Ltr
