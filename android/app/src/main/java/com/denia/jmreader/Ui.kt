@@ -107,7 +107,10 @@ fun IosCard(modifier: Modifier = Modifier, radius: androidx.compose.ui.unit.Dp =
 sealed interface Dest
 data class DetailDest(val id: String) : Dest
 data class CommentsDest(val id: String, val title: String) : Dest
-data class ReaderDest(val chapterId: String, val albumTitle: String, val albumId: String = "") : Dest
+data class ReaderDest(val chapterId: String, val albumTitle: String, val albumId: String = "", val startPage: Int = 0) : Dest
+data class LocalComicDest(val bookId: String) : Dest
+data class LocalNovelDest(val bookId: String) : Dest
+data class PdfDest(val path: String) : Dest
 data class AuthorDest(val name: String) : Dest
 data class CategoryDest(val slug: String, val name: String) : Dest
 object DownloadsDest : Dest
@@ -174,6 +177,17 @@ object DownloadManager {
     fun files(context: Context): List<File> =
         dir(context).listFiles { f -> f.isFile && (f.extension == "pdf" || f.extension == "cbz") }
             ?.sortedByDescending { it.lastModified() } ?: emptyList()
+
+    private fun metadata(context: Context) = context.getSharedPreferences("jm.downloads.meta", Context.MODE_PRIVATE)
+    private fun meta(context: Context, file: File): JSONObject =
+        runCatching { JSONObject(metadata(context).getString(file.name, "{}") ?: "{}") }.getOrDefault(JSONObject())
+
+    fun albumIdOf(context: Context, file: File): String = meta(context, file).optString("albumId")
+        .ifEmpty { file.nameWithoutExtension.substringBefore('_').takeIf { it.all(Char::isDigit) }.orEmpty() }
+    fun titleOf(context: Context, file: File): String = meta(context, file).optString("title")
+        .ifEmpty { file.nameWithoutExtension.substringAfter('_', file.nameWithoutExtension) }
+    fun categoryOf(context: Context, file: File): String = meta(context, file).optString("category")
+    fun forgetMeta(context: Context, fileName: String) { metadata(context).edit().remove(fileName).apply() }
 
     fun share(context: Context, file: File) {
         val uri: Uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
@@ -286,6 +300,10 @@ object DownloadManager {
                 } finally {
                     doc.close()
                 }
+                metadata(appCtx).edit().putString(outFile.name, JSONObject().apply {
+                    put("albumId", album.id); put("title", album.name)
+                    put("category", detail.optJSONObject("category")?.optString("title").orEmpty())
+                }.toString()).apply()
                 exportToDownloads(appCtx, outFile)
                 stage.deleteRecursively()
                 withContext(Dispatchers.Main) { task.state = State.DONE }

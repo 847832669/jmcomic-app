@@ -4,7 +4,6 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.layout.Row
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -18,17 +17,30 @@ import okhttp3.Request
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
-/** Update prompt (mirrors the iOS UpdateChecker): compares the installed
- *  version against the repo's latest PUBLISHED GitHub release — public
- *  repo, plain unauthenticated GET; drafts never appear in that endpoint,
- *  so only formal releases prompt. Version numbers follow the project's
- *  decimal scheme (…2.19 -> 2.2), so a Double compare is exact for them. */
+/** Preserve upstream's decimal version order (2.19 < 2.2 == 2.20),
+ *  then compare the fork's glass build without losing integer precision. */
+internal fun isNewerReleaseVersion(latest: String, current: String): Boolean {
+    val pattern = Regex("^v?(\\d+(?:\\.\\d+)?)(?:-glass\\.(\\d+))?$")
+    fun parse(value: String): Pair<java.math.BigDecimal, java.math.BigInteger>? {
+        val match = pattern.matchEntire(value.trim()) ?: return null
+        return match.groupValues[1].toBigDecimal() to
+            match.groupValues[2].ifEmpty { "0" }.toBigInteger()
+    }
+    val l = parse(latest) ?: return false
+    val c = parse(current) ?: return false
+    val base = l.first.compareTo(c.first)
+    return base > 0 || (base == 0 && l.second > c.second)
+}
+
+/** Check only published releases from this fork so updates retain its features and signature. */
 object UpdateCheck {
     var latestVersion by mutableStateOf<String?>(null)
         private set
     var latestUrl by mutableStateOf<String?>(null)
         private set
     var checking by mutableStateOf(false)
+        private set
+    var errorMessage by mutableStateOf<String?>(null)
         private set
     var showPrompt by mutableStateOf(false)
 
@@ -45,9 +57,7 @@ object UpdateCheck {
         } catch (e: Exception) { "0" }
 
     fun isUpdate(current: String): Boolean {
-        val l = latestVersion?.toDoubleOrNull() ?: return false
-        val c = current.toDoubleOrNull() ?: return false
-        return l > c
+        return latestVersion?.let { isNewerReleaseVersion(it, current) } ?: false
     }
 
     /** Silent launch check, throttled to once per 6 hours; the prompt
@@ -62,21 +72,24 @@ object UpdateCheck {
     suspend fun check(context: Context, manual: Boolean) {
         if (checking) return
         checking = true
+        errorMessage = null
         try {
             val body = withContext(Dispatchers.IO) {
                 val req = Request.Builder()
-                    .url("https://api.github.com/repos/denia-dev/jmcomic-app/releases/latest")
+                    .url("https://api.github.com/repos/847832669/jmcomic-app/releases/latest")
                     .header("Accept", "application/vnd.github+json")
                     .build()
                 client.newCall(req).execute().use { resp ->
-                    if (!resp.isSuccessful) return@withContext null
+                    check(resp.isSuccessful) { "HTTP ${resp.code}" }
                     resp.body?.string()
                 }
-            } ?: return
+            } ?: error("空响应")
             val obj = JSONObject(body)
             val tag = obj.optString("tag_name")
             val url = obj.optString("html_url")
-            if (tag.isEmpty() || url.isEmpty()) return
+            check(tag.isNotEmpty() && url.startsWith("https://github.com/847832669/jmcomic-app/releases/")) {
+                "无效发布信息"
+            }
             val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             prefs.edit().putLong("lastCheck", System.currentTimeMillis()).apply()
             latestVersion = tag.removePrefix("v")
@@ -85,8 +98,10 @@ object UpdateCheck {
                 val ignored = prefs.getString("ignored", null)
                 if (manual || ignored != latestVersion) showPrompt = true
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
-            // Offline / GitHub unreachable: stay silent, retry next launch.
+            errorMessage = "检查失败，请重试"
         } finally {
             checking = false
         }
@@ -111,7 +126,7 @@ object UpdateCheck {
 
 @Composable
 fun UpdatePromptDialog(context: Context) {
-    AlertDialog(
+    GlassAlertDialog(
         onDismissRequest = { UpdateCheck.showPrompt = false },
         title = { Text("有新版本 v${UpdateCheck.latestVersion ?: ""}") },
         text = {
