@@ -56,7 +56,7 @@ import kotlin.math.roundToInt
 val LocalNavigationClearance = staticCompositionLocalOf { 0.dp }
 
 /** Independently drawn material: 56dp capsule and 48dp neutral selection, measured on device.
- * The protected reference APK does not expose its shader or animation constants. */
+ * The protected reference's active shader parameters and animation constants remain unknown. */
 @Composable
 fun LiquidGlassBottomBar(selectedPage: Int, pagePosition: Float, backdrop: GlassBackdrop,
                          onSelect: (Int) -> Unit, modifier: Modifier = Modifier) {
