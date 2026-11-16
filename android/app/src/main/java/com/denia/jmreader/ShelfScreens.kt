@@ -259,7 +259,7 @@ fun BookshelfScreen(router: Router) {
                             LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                 items(railEntries, key = { it.albumId }) { entry ->
                                     CoverImage(entry.albumId, Modifier.width(96.dp)
-                                        .clickable { router.push(ReaderDest(entry.chapterId, entry.title, entry.albumId, entry.page)) })
+                                        .clickable { router.push(ReaderDest(entry.chapterId, entry.title, entry.albumId)) })
                                 }
                             }
                         }

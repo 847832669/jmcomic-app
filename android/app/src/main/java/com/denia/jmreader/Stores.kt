@@ -330,48 +330,6 @@ object BlockTags {
     }
 }
 
-/** Online reading history for the bookshelf's 最近阅读 rail — the Android
- *  counterpart of iOS's LibraryStore.progress (Android had no reading-
- *  progress store before v2.30). Newest first, one entry per album,
- *  capped at 50. In-memory list is Compose state; persistence is plain
- *  SharedPreferences JSON, written on each record (records are throttled
- *  by the reader's page-change effect). */
-object ReadHistory {
-    data class Entry(val albumId: String, val title: String, val chapterId: String, val page: Int, val ts: Long)
-
-    private var prefs: SharedPreferences? = null
-    var entries by mutableStateOf<List<Entry>>(emptyList())
-        private set
-
-    fun init(context: Context) {
-        if (prefs != null) return
-        val p = context.getSharedPreferences("jm.readhistory", Context.MODE_PRIVATE)
-        prefs = p
-        val arr = try { JSONArray(p.getString("entries", "[]") ?: "[]") } catch (e: Exception) { JSONArray() }
-        val out = mutableListOf<Entry>()
-        for (i in 0 until arr.length()) {
-            val o = arr.optJSONObject(i) ?: continue
-            val id = o.optString("albumId")
-            if (id.isEmpty()) continue
-            out.add(Entry(id, o.optString("title"), o.optString("chapterId"), o.optInt("page"), o.optLong("ts")))
-        }
-        entries = out
-    }
-
-    fun record(albumId: String, title: String, chapterId: String, page: Int) {
-        if (albumId.isEmpty() || chapterId.isEmpty()) return
-        val e = Entry(albumId, title, chapterId, page, System.currentTimeMillis())
-        entries = (listOf(e) + entries.filter { it.albumId != albumId }).take(50)
-        val arr = JSONArray()
-        for (en in entries) {
-            arr.put(JSONObject()
-                .put("albumId", en.albumId).put("title", en.title)
-                .put("chapterId", en.chapterId).put("page", en.page).put("ts", en.ts))
-        }
-        prefs?.edit()?.putString("entries", arr.toString())?.apply()
-    }
-}
-
 /** Reading statistics (mirror of iOS v2.19): albums/chapters counted once,
  * pages counted only as actually reached (per-episode furthest page),
  * plus reading time. The v1 counting added a chapter's full page count the

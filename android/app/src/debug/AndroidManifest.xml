@@ -2,5 +2,6 @@
     <application>
         <activity android:name=".GlassPreviewActivity" android:exported="true" />
         <activity android:name=".CommunityPreviewActivity" android:exported="true" />
+        <activity android:name=".ReadingPreviewActivity" android:exported="true" />
     </application>
 </manifest>
