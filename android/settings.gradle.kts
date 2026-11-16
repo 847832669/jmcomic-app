@@ -14,3 +14,4 @@ dependencyResolutionManagement {
 }
 rootProject.name = "JMReaderAndroid"
 include(":app")
+include(":liquidglass")

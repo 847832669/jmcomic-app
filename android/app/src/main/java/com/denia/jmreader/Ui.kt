@@ -1,5 +1,6 @@
 package com.denia.jmreader
 
+import android.app.Activity
 import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
@@ -20,10 +21,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.setValue
@@ -31,9 +34,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
+import androidx.core.view.WindowCompat
 import coil.compose.AsyncImage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -54,7 +60,11 @@ val Blue = Color(0xFF0091FF)
 
 @Composable
 fun JmTheme(content: @Composable () -> Unit) {
-    val dark = isSystemInDarkTheme()
+    val dark = when (Settings.themeMode) {
+        "light" -> false
+        "dark" -> true
+        else -> isSystemInDarkTheme()
+    }
     val scheme = if (dark) darkColorScheme(
         primary = Pink, secondary = Blue,
         background = Color(0xFF0E0E12), surface = Color(0xFF17171D), surfaceVariant = Color(0xFF22222A),
@@ -64,24 +74,39 @@ fun JmTheme(content: @Composable () -> Unit) {
         background = Color(0xFFF2F2F7), surface = Color.White, surfaceVariant = Color(0xFFEFEFF4),
         outlineVariant = Color(0xFFE2E2E8),
     )
-    MaterialTheme(colorScheme = scheme, content = content)
+    val view = LocalView.current
+    val window = (view.context as? Activity)?.window
+    if (!view.isInEditMode && window != null) {
+        SideEffect {
+            window.statusBarColor = scheme.background.toArgb()
+            window.navigationBarColor = scheme.background.toArgb()
+            WindowCompat.getInsetsController(window, view).apply {
+                isAppearanceLightStatusBars = !dark
+                isAppearanceLightNavigationBars = !dark
+            }
+        }
+    }
+    MaterialTheme(colorScheme = scheme) {
+        Surface(Modifier.fillMaxSize(), color = scheme.background, content = content)
+    }
 }
 
-/** iOS-style glass card: surface fill, hairline border, large radius. */
+/** Shared glass material for profile, settings, storage and download panels. */
 @Composable
 fun IosCard(modifier: Modifier = Modifier, radius: androidx.compose.ui.unit.Dp = 20.dp,
             onClick: (() -> Unit)? = null, content: @Composable () -> Unit) {
-    androidx.compose.material3.Surface(
+    GlassSurface(
         shape = RoundedCornerShape(radius),
-        color = MaterialTheme.colorScheme.surface,
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        modifier = if (onClick != null) modifier.clickable { onClick() } else modifier,
+        radius = radius,
+        modifier = modifier,
+        onClick = onClick,
     ) { content() }
 }
 
 // ---------- navigation ----------
 sealed interface Dest
 data class DetailDest(val id: String) : Dest
+data class CommentsDest(val id: String, val title: String) : Dest
 data class ReaderDest(val chapterId: String, val albumTitle: String, val albumId: String = "") : Dest
 data class AuthorDest(val name: String) : Dest
 data class CategoryDest(val slug: String, val name: String) : Dest
