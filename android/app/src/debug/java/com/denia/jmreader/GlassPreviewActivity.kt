@@ -50,7 +50,7 @@ class GlassPreviewActivity : ComponentActivity() {
                             GlassSurface(Modifier.fillMaxWidth(), prominent = true, tintStrength = 0.15f) {
                                 Column(Modifier.padding(28.dp)) {
                                     Text("Liquid Glass", style = MaterialTheme.typography.headlineMedium)
-                                    Text("清晰文字 · 背景折射 · 色散高光")
+                                    Text("清晰文字 · 柔和表面 · 玻璃底栏")
                                 }
                             }
                             GlassButton(onClick = { chart = !chart } , modifier = Modifier.fillMaxWidth()) { Text("纯色背景") }
