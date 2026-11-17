@@ -78,7 +78,7 @@ fun JmTheme(content: @Composable () -> Unit) {
     val window = (view.context as? Activity)?.window
     if (!view.isInEditMode && window != null) {
         SideEffect {
-            window.statusBarColor = scheme.background.toArgb()
+            window.statusBarColor = Color.Transparent.toArgb()
             window.navigationBarColor = scheme.background.toArgb()
             WindowCompat.getInsetsController(window, view).apply {
                 isAppearanceLightStatusBars = !dark
