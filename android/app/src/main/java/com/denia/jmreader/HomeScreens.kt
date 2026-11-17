@@ -94,7 +94,7 @@ fun PagedGrid(loader: suspend (Int) -> List<JmApi.Album>, router: Router, key: A
         loading && items.isEmpty() -> LoadingBox()
         error != null && items.isEmpty() -> ErrorText(error!!) { error = null; scope.launch { load(1) } }
         else -> LazyVerticalGrid(GridCells.Fixed(3), state = gridState,
-            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 20.dp),
+            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 20.dp + LocalNavigationClearance.current),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
             items(shown, key = { it.id }) { AlbumCard(it, router) }
@@ -125,7 +125,7 @@ fun HomeScreen(router: Router, goProfile: () -> Unit, goSearch: () -> Unit = {})
             Image(painterResource(R.drawable.avatar), contentDescription = null,
                 modifier = Modifier.size(40.dp).clip(CircleShape).clickable { goProfile() })
             Spacer(Modifier.width(10.dp))
-            Surface(shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.surface,
+            GlassSurface(shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.surface,
                 border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                 modifier = Modifier.weight(1f).clickable { goSearch() }) {
                 Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -137,7 +137,7 @@ fun HomeScreen(router: Router, goProfile: () -> Unit, goSearch: () -> Unit = {})
             }
             Spacer(Modifier.width(10.dp))
             Box {
-                Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surface,
+                GlassSurface(shape = CircleShape, color = MaterialTheme.colorScheme.surface,
                     border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                     modifier = Modifier.size(40.dp).clickable { router.push(DownloadsDest) }) {
                     Box(contentAlignment = Alignment.Center) {
@@ -167,7 +167,7 @@ fun ScrollableChannelRow(names: List<String>, selected: Int, onSelect: (Int) -> 
     LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         items(names.indices.toList()) { i ->
             val sel = i == selected
-            Surface(
+            GlassSurface(
                 shape = RoundedCornerShape(50),
                 color = if (sel) Pink else MaterialTheme.colorScheme.surface,
                 border = if (sel) null else androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
@@ -202,7 +202,7 @@ fun RecommendContent(router: Router) {
     when {
         sections == null && error == null -> LoadingBox()
         error != null -> ErrorText(error!!) { error = null; sections = null; reload++ }
-        else -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(top = 10.dp, bottom = 20.dp)) {
+        else -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(top = 10.dp, bottom = 20.dp + LocalNavigationClearance.current)) {
             sections?.forEach { (title, albums) ->
                 val shownAlbums = BlockTags.visible(albums)
                 if (shownAlbums.isNotEmpty()) {
@@ -241,7 +241,7 @@ fun OptionChipRow(options: List<String>, selected: Int, onSelect: (Int) -> Unit)
         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)) {
         items(options.size) { i ->
             val sel = i == selected
-            Surface(
+            GlassSurface(
                 shape = RoundedCornerShape(50),
                 color = if (sel) Pink else MaterialTheme.colorScheme.surface,
                 border = if (sel) null else androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
@@ -290,7 +290,7 @@ fun SearchScreen(router: Router, history: HistoryStore) {
     }
 
     Column(Modifier.fillMaxSize().padding(top = 10.dp)) {
-        OutlinedTextField(
+        GlassTextField(
             value = query, onValueChange = { query = it },
             placeholder = { Text("搜索标题 / 作者") },
             singleLine = true,
@@ -317,6 +317,7 @@ fun SearchScreen(router: Router, history: HistoryStore) {
             Text("编号直达", fontWeight = FontWeight.Bold, fontSize = 14.sp,
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp))
             LazyVerticalGrid(GridCells.Fixed(3), modifier = Modifier.weight(1f).padding(horizontal = 14.dp),
+                contentPadding = PaddingValues(bottom = 20.dp + LocalNavigationClearance.current),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 item { AlbumCard(red, router) }
@@ -330,7 +331,7 @@ fun SearchScreen(router: Router, history: HistoryStore) {
                 }
                 LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(queries) { q ->
-                        Surface(shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.surface,
+                        GlassSurface(shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.surface,
                             border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                             modifier = Modifier.clickable { query = q; submitted = q }) {
                             Text(q, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp))
@@ -358,7 +359,7 @@ fun CategoriesScreen(router: Router) {
         cats == null && error == null -> LoadingBox()
         error != null -> ErrorText(error!!)
         else -> androidx.compose.foundation.lazy.LazyColumn(Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 20.dp)) {
+            contentPadding = PaddingValues(bottom = 20.dp + LocalNavigationClearance.current)) {
             items(cats!!.filter { it.slug.isNotEmpty() }, key = { it.slug }) { c ->
                 Row(Modifier.fillMaxWidth().clickable { router.push(CategoryDest(c.slug, c.name)) }
                     .padding(horizontal = 16.dp, vertical = 15.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -382,8 +383,11 @@ fun CategoryPage(dest: CategoryDest, router: Router) {
 
 @Composable
 fun TopBar(title: String, onBack: () -> Unit) {
+    GlassSurface(modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
+        shape = RoundedCornerShape(24.dp), radius = 24.dp) {
     Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         TextButton(onClick = onBack) { Text("‹ 返回", color = Pink, fontSize = 15.sp) }
         Text(title, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
     }
 }

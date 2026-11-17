@@ -6,39 +6,14 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.layout.statusBars
-import androidx.compose.ui.draw.shadow
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.MenuBook
-import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.Icon
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -46,8 +21,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Immersive top: transparent status bar, the wallpaper gradient runs
-        // edge to edge; content keeps its own status-bar inset padding.
+        // The wallpaper reaches behind the transparent status bar; each page
+        // retains its status-bar inset so controls remain below the system icons.
         enableEdgeToEdge()
         if (savedInstanceState == null && intent?.action == android.content.Intent.ACTION_VIEW) {
             pdfUri = intent.data
@@ -82,7 +57,7 @@ fun ExternalPdfOpener(uri: android.net.Uri, onReady: (java.io.File) -> Unit, onF
     Box(Modifier.fillMaxSize())
 }
 
-// Display order: 首页 / 分类 / 个人 / 搜索 (same as the iOS app)
+// Display order follows upstream v2.30; keep the fork's glass material.
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun JmApp(externalPdf: android.net.Uri? = null, onExternalPdfDone: () -> Unit = {}) {
@@ -90,9 +65,9 @@ fun JmApp(externalPdf: android.net.Uri? = null, onExternalPdfDone: () -> Unit = 
     val account = remember { AccountStore(context).apply { syncApi() } }
     val library = remember { LibraryStore(context) }
     val history = remember { HistoryStore(context) }
-    remember { BlockTags.init(context); ReadingStats.init(context); RemovedFavs.init(context); ReadHistory.init(context); LocalBooks.init(context) }
+    remember { BlockTags.init(context); ReadingStats.init(context); RemovedFavs.init(context) }
     remember { Lines.init(context) }
-    remember { Settings.init(context) }
+    remember { Settings.init(context); LocalBooks.init(context); ReadHistory.init(context); BrowseHistory.init(context) }
     remember { FolderRegistry.init(context) }
     LaunchedEffect(Unit) {
         JmApi.imgHost = Lines.currentImgHost()
@@ -110,75 +85,75 @@ fun JmApp(externalPdf: android.net.Uri? = null, onExternalPdfDone: () -> Unit = 
     }
 
     var viewingExternal by remember { mutableStateOf<java.io.File?>(null) }
+    val showBottomBar = router.stack.isEmpty() && viewingExternal == null && externalPdf == null
     JmTheme {
-        if (UpdateCheck.showPrompt) UpdatePromptDialog(context)
-        if (viewingExternal != null) {
-            PdfViewerScreen(viewingExternal!!) { viewingExternal = null }
-            return@JmTheme
-        }
-        if (externalPdf != null) {
-            ExternalPdfOpener(externalPdf,
-                onReady = { f -> viewingExternal = f; onExternalPdfDone() },
-                onFail = { onExternalPdfDone() })
-            return@JmTheme
-        }
-        // Liquid glass tab bar (:liquidglass module, QmDeve library). The bar
-        // floats over a reserved 92dp strip: page content still never slides
-        // underneath it (the strip is empty space over the wallpaper
-        // gradient), and the glass samples the recorded scene behind it.
         val wallpaper = rememberGlassBackdrop()
         val scene = rememberGlassBackdrop()
         CompositionLocalProvider(LocalGlassBackdrop provides wallpaper) {
-        Box(Modifier.fillMaxSize()) {
-        Box(Modifier.fillMaxSize().glassBackdrop(scene)) {
-            Box(Modifier.fillMaxSize().glassBackdrop(wallpaper)) { GlassWallpaper() }
-            Column(Modifier.fillMaxSize()) {
-            Box(Modifier.weight(1f).fillMaxWidth()
-                .windowInsetsPadding(androidx.compose.foundation.layout.WindowInsets.statusBars)) {
-                val top = router.stack.lastOrNull()
-                if (top == null) {
-                    HorizontalPager(state = pagerState) { page ->
-                        when (page) {
-                            0 -> HomeScreen(router, account, library,
-                                goProfile = { scope.launch { pagerState.animateScrollToPage(2) } },
-                                goSearch = { scope.launch { pagerState.animateScrollToPage(3) } })
-                            1 -> BookshelfScreen(router)
-                            2 -> ProfileScreen(router, account, library)
-                            else -> SearchScreen(router, history)
+            Box(Modifier.fillMaxSize()) {
+                Box(Modifier.fillMaxSize().glassBackdrop(scene)) {
+                    Box(Modifier.fillMaxSize().glassBackdrop(wallpaper)) { GlassWallpaper() }
+                    Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars)) {
+                        Box(Modifier.weight(1f).fillMaxWidth().windowInsetsPadding(WindowInsets.statusBars)) {
+                        when {
+                            viewingExternal != null -> PdfViewerScreen(viewingExternal!!) { viewingExternal = null }
+                            externalPdf != null -> ExternalPdfOpener(externalPdf,
+                                onReady = { f -> viewingExternal = f; onExternalPdfDone() },
+                                onFail = { onExternalPdfDone() })
+                            else -> {
+                                val top = router.stack.lastOrNull()
+                                if (top == null) {
+                                    CompositionLocalProvider(LocalNavigationClearance provides 88.dp) {
+                                        HorizontalPager(state = pagerState) { page ->
+                                            when (page) {
+                                                0 -> HomeScreen(router,
+                                                    goProfile = { scope.launch { pagerState.animateScrollToPage(2) } },
+                                                    goSearch = { scope.launch { pagerState.animateScrollToPage(3) } })
+                                                1 -> BookshelfScreen(router)
+                                                2 -> ProfileScreen(router, account, library)
+                                                else -> SearchScreen(router, history)
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    when (top) {
+                                        is DetailDest -> DetailScreen(top, router, account, library)
+                                        is CommentsDest -> CommentsScreen(top, { router.pop() }, account.isLoggedIn,
+                                            onLogin = {
+                                                router.stack.clear()
+                                                scope.launch { pagerState.animateScrollToPage(2) }
+                                            })
+                                        is ReaderDest -> ReaderScreen(top, router)
+                                        BrowseHistoryDest -> BrowseHistoryScreen(router)
+                                        is LocalComicDest, is LocalNovelDest -> LocalReaderHost(top, router)
+                                        is PdfDest -> PdfViewerScreen(java.io.File(top.path)) { router.pop() }
+                                        is AuthorDest -> AuthorScreen(top, router)
+                                        is CategoryDest -> CategoryPage(top, router)
+                                        DownloadsDest -> DownloadsScreen(router)
+                                        BlockedTagsDest -> BlockedTagsScreen(router)
+                                        StorageDest -> StorageScreen(router)
+                                        SettingsDest -> SettingsScreen(router, account)
+                                        LinesDest -> LinesScreen(router)
+                                    }
+                                }
+                            }
                         }
                     }
-                } else {
-                    when (top) {
-                        is DetailDest -> DetailScreen(top, router, account, library)
-                        is ReaderDest -> ReaderScreen(top, router)
-                        is AuthorDest -> AuthorScreen(top, router)
-                        is CategoryDest -> CategoryPage(top, router)
-                        is LocalComicDest -> LocalReaderHost(top, router)
-                        is LocalNovelDest -> LocalReaderHost(top, router)
-                        DownloadsDest -> DownloadsScreen(router)
-                        BlockedTagsDest -> BlockedTagsScreen(router)
-                        StorageDest -> StorageScreen(router)
-                        SettingsDest -> SettingsScreen(router, account)
-                        LinesDest -> LinesScreen(router)
                     }
                 }
-            }
-                if (router.stack.isEmpty()) {
-                    androidx.compose.foundation.layout.Spacer(Modifier.height(92.dp))
+                if (showBottomBar) {
+                        LiquidGlassBottomBar(
+                            selectedPage = tab,
+                            pagePosition = pagerState.currentPage + pagerState.currentPageOffsetFraction,
+                            backdrop = scene,
+                            onSelect = { page -> scope.launch { pagerState.animateScrollToPage(page) } },
+                            modifier = Modifier.align(Alignment.BottomCenter)
+                                .windowInsetsPadding(WindowInsets.navigationBars)
+                                .padding(horizontal = 20.dp, vertical = 20.dp),
+                        )
                 }
+                if (UpdateCheck.showPrompt) UpdatePromptDialog(context)
             }
-        }
-        if (router.stack.isEmpty()) {
-            LiquidGlassBottomBar(
-                selectedPage = tab,
-                pagePosition = pagerState.currentPage + pagerState.currentPageOffsetFraction,
-                backdrop = scene,
-                onSelect = { page -> scope.launch { pagerState.animateScrollToPage(page) } },
-                modifier = Modifier.align(Alignment.BottomCenter)
-                    .padding(horizontal = 20.dp, vertical = 18.dp),
-            )
-        }
-        }
         }
     }
 }

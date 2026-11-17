@@ -12,6 +12,7 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -21,6 +22,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.*
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -57,11 +59,17 @@ private fun android.view.View.windowOrigin(): Offset {
 val LocalGlassBackdrop = staticCompositionLocalOf<GlassBackdrop?> { null }
 
 /** Record the sampling branch independently of the glass components. */
-fun Modifier.glassBackdrop(backdrop: GlassBackdrop): Modifier = this
+fun Modifier.glassBackdrop(backdrop: GlassBackdrop, background: GlassBackdrop? = null): Modifier = this
     .onGloballyPositioned { backdrop.origin = it.positionInWindow() + backdrop.view.windowOrigin() }
     .drawWithContent {
         val scope = this
         backdrop.layer.record(size = IntSize(size.width.roundToInt(), size.height.roundToInt())) {
+            // Composite the already-recorded page before a derived material. The selection
+            // lens can then refract the frosted navigation surface without sampling itself.
+            if (background?.ready == true) {
+                val offset = background.origin - backdrop.origin
+                translate(offset.x, offset.y) { drawLayer(background.layer) }
+            }
             scope.drawContent()
         }
         backdrop.ready = true
@@ -83,7 +91,7 @@ fun GlassWallpaper(modifier: Modifier = Modifier) {
     }
 }
 
-/** The same upstream LiquidGlassView material under every surface and navigation lens. */
+/** Rounded theme surface by default; only navigation explicitly opts into native glass. */
 @Composable
 fun GlassSurface(
     modifier: Modifier = Modifier,
@@ -94,9 +102,24 @@ fun GlassSurface(
     radius: Dp = 20.dp,
     prominent: Boolean = false,
     tintStrength: Float? = null,
+    blurRadius: Dp = 0.dp,
+    refractionHeight: Dp = 20.dp,
+    refractionOffset: Dp = 70.dp,
+    dispersion: Float = 0.5f,
+    liquidGlass: Boolean = false,
     onClick: (() -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
+    if (!liquidGlass) {
+        Surface(
+            modifier = modifier.then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
+            shape = shape, color = color, border = border,
+            shadowElevation = if (prominent) 2.dp else 0.dp,
+        ) {
+            Box(propagateMinConstraints = true) { content() }
+        }
+        return
+    }
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
     val density = LocalDensity.current
     val direction = LocalLayoutDirection.current
@@ -124,14 +147,18 @@ fun GlassSurface(
         .onSizeChanged { panelSize = it }
         .drawWithContent {
             // The selected library has no shader support below API 33. Keep controls legible.
-            if (!native) drawRect(color.copy(alpha = if (accent) 0.9f else if (dark) 0.9f else 0.84f))
+            if (!native) drawRect(color.copy(alpha = if (tintStrength != null) alpha
+                else if (accent) 0.9f else if (dark) 0.9f else 0.84f))
             drawContent()
         }, propagateMinConstraints = true) {
         if (native) {
             AndroidView(factory = { QmGlassHost(it) }, modifier = Modifier.matchParentSize(),
                 onRelease = { it.release() }, update = {
                     it.update(backdrop!!, density, direction, actualRadius,
-                        color.red, color.green, color.blue, alpha)
+                        color.red, color.green, color.blue, alpha,
+                        with(density) { blurRadius.toPx() }.coerceAtLeast(0.01f),
+                        with(density) { refractionHeight.toPx() },
+                        with(density) { refractionOffset.toPx() }, dispersion)
                 })
         }
         content()

@@ -1,5 +1,8 @@
 package com.denia.jmreader
 
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -23,6 +26,7 @@ fun SettingsScreen(router: Router, account: AccountStore) {
     val context = LocalContext.current
     val settingsScope = rememberCoroutineScope()
     var storageBytes by remember { mutableStateOf<Long?>(null) }
+    var commentKeyword by remember { mutableStateOf("") }
     LaunchedEffect(Unit) {
         storageBytes = withContext(Dispatchers.IO) {
             val p = storageParts(context); p.first + p.second
@@ -31,6 +35,25 @@ fun SettingsScreen(router: Router, account: AccountStore) {
     Column(Modifier.fillMaxSize()) {
         TopBar(title = "设置") { router.pop() }
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+            IosCard(radius = 16.dp, modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("外观", fontSize = 16.sp)
+                    Spacer(Modifier.height(12.dp))
+                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                        listOf("system" to "跟随系统", "light" to "日间", "dark" to "夜间")
+                            .forEachIndexed { index, (mode, label) ->
+                                SegmentedButton(
+                                    selected = Settings.themeMode == mode,
+                                    onClick = { Settings.updateThemeMode(mode) },
+                                    shape = SegmentedButtonDefaults.itemShape(index, 3),
+                                ) {
+                                    Text(label, fontSize = 12.sp, maxLines = 1)
+                                }
+                            }
+                    }
+                }
+            }
+            Spacer(Modifier.height(10.dp))
             IosCard(radius = 16.dp, modifier = Modifier.fillMaxWidth()) {
                 Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
@@ -66,6 +89,35 @@ fun SettingsScreen(router: Router, account: AccountStore) {
                 }
             }
             Spacer(Modifier.height(10.dp))
+            IosCard(radius = 16.dp, modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("评论关键词屏蔽", fontSize = 16.sp)
+                    Text("命中关键词的评论及其回复会被隐藏", fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(10.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        GlassTextField(commentKeyword, { commentKeyword = it },
+                            placeholder = { Text("输入要屏蔽的关键词") }, singleLine = true,
+                            modifier = Modifier.weight(1f))
+                        Spacer(Modifier.width(6.dp))
+                        IconButton(onClick = {
+                            if (Settings.addCommentBlockedKeyword(commentKeyword)) commentKeyword = ""
+                        }, enabled = commentKeyword.isNotBlank()) {
+                            Icon(Icons.Default.Add, contentDescription = "添加关键词", tint = Pink)
+                        }
+                    }
+                    Settings.commentBlockedKeywords.forEach { keyword ->
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text(keyword, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                            IconButton(onClick = { Settings.removeCommentBlockedKeyword(keyword) }) {
+                                Icon(Icons.Default.Close, contentDescription = "移除 $keyword",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(10.dp))
             IosCard(radius = 16.dp, onClick = { router.push(StorageDest) }, modifier = Modifier.fillMaxWidth()) {
                 Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("存储空间", fontSize = 16.sp)
@@ -88,6 +140,8 @@ fun SettingsScreen(router: Router, account: AccountStore) {
                     when {
                         UpdateCheck.checking ->
                             Text("检查中…", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        UpdateCheck.errorMessage != null ->
+                            Text(UpdateCheck.errorMessage!!, fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
                         UpdateCheck.latestVersion == null ->
                             Text("当前 v$cur", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         UpdateCheck.isUpdate(cur) ->
@@ -99,7 +153,7 @@ fun SettingsScreen(router: Router, account: AccountStore) {
                 }
             }
             Spacer(Modifier.height(24.dp))
-            Text("JM Reader Android v${UpdateCheck.currentVersion(context)}", fontSize = 12.sp,
+            Text("JM Reader Android ${BuildConfig.VERSION_NAME}", fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.align(Alignment.CenterHorizontally))
         }
@@ -133,8 +187,8 @@ fun LinesScreen(router: Router) {
                     latText(apiLat, line.host, testingApi)) { Lines.pinApi(line.host) }
             }
             Spacer(Modifier.height(8.dp))
-            Button(onClick = {
-                if (testingApi) return@Button
+            GlassButton(onClick = {
+                if (testingApi) return@GlassButton
                 testingApi = true
                 scope.launch {
                     val out = mutableMapOf<String, Long?>()
@@ -157,8 +211,8 @@ fun LinesScreen(router: Router) {
                     latText(imgLat, host, testingImg)) { Lines.pinImg(host) }
             }
             Spacer(Modifier.height(8.dp))
-            Button(onClick = {
-                if (testingImg) return@Button
+            GlassButton(onClick = {
+                if (testingImg) return@GlassButton
                 testingImg = true
                 scope.launch {
                     val out = mutableMapOf<String, Long?>()
@@ -179,8 +233,8 @@ fun LinesScreen(router: Router) {
             }
 
             Spacer(Modifier.height(20.dp))
-            OutlinedButton(onClick = {
-                if (refreshing) return@OutlinedButton
+            GlassOutlinedButton(onClick = {
+                if (refreshing) return@GlassOutlinedButton
                 refreshing = true
                 scope.launch { Lines.refresh(true); refreshing = false }
             }, enabled = !refreshing, shape = RoundedCornerShape(14.dp),

@@ -46,11 +46,9 @@ import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Book
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.PictureAsPdf
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -101,7 +99,6 @@ fun BookshelfScreen(router: Router) {
     var segment by remember { mutableIntStateOf(0) }       // 0 全部 / 1 下载 / 2 导入
     var typeFilter by remember { mutableIntStateOf(0) }    // 0 全部 / 1 漫画 / 2 小说
     var categoryFilter by remember { mutableStateOf<String?>(null) }
-    var viewingPdf by remember { mutableStateOf<File?>(null) }
     var importing by remember { mutableStateOf(false) }
     var note by remember { mutableStateOf<String?>(null) }
     var deleteDl by remember { mutableStateOf<File?>(null) }
@@ -116,11 +113,6 @@ fun BookshelfScreen(router: Router) {
         is ShelfItem.Local -> "local:" + item.book.id
     }
     fun toggleKey(k: String) { selection = if (k in selection) selection - k else selection + k }
-
-    if (viewingPdf != null) {
-        PdfViewerScreen(viewingPdf!!) { viewingPdf = null }
-        return
-    }
 
     var dlFiles by remember { mutableStateOf(DownloadManager.files(context)) }
     LaunchedEffect(DownloadManager.tasks.map { it.state }, segment) {
@@ -191,7 +183,7 @@ fun BookshelfScreen(router: Router) {
                         MaterialTheme.colorScheme.onSurfaceVariant else Pink)
                 }
             }
-            Surface(shape = CircleShape, color = Pink,
+            GlassSurface(shape = CircleShape, color = Pink,
                 modifier = Modifier.size(36.dp).clickable { launcher.launch(arrayOf("*/*")) }) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(Icons.Default.Add, contentDescription = "导入", tint = Color.White, modifier = Modifier.size(20.dp))
@@ -203,7 +195,7 @@ fun BookshelfScreen(router: Router) {
             horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf("全部", "下载", "导入").forEachIndexed { i, label ->
                 val sel = segment == i
-                Surface(shape = RoundedCornerShape(50),
+                GlassSurface(shape = RoundedCornerShape(50),
                     color = if (sel) Pink else MaterialTheme.colorScheme.surface,
                     border = if (sel) null else androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                     modifier = Modifier.weight(1f).clickable {
@@ -255,7 +247,8 @@ fun BookshelfScreen(router: Router) {
             }
         } else {
             LazyVerticalGrid(columns = GridCells.Fixed(3),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 10.dp,
+                    bottom = 10.dp + LocalNavigationClearance.current),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
                 modifier = Modifier.fillMaxSize()) {
@@ -281,7 +274,7 @@ fun BookshelfScreen(router: Router) {
                 }) { item ->
                     when (item) {
                         is ShelfItem.Dl -> DownloadCell(item.file, context,
-                            onOpen = { if (item.file.extension == "pdf") viewingPdf = item.file },
+                            onOpen = { if (item.file.extension == "pdf") router.push(PdfDest(item.file.absolutePath)) else DownloadManager.share(context, item.file) },
                             onLongPress = { deleteDl = item.file },
                             selecting = selecting,
                             selected = selection.contains(itemKey(item)),
@@ -289,7 +282,7 @@ fun BookshelfScreen(router: Router) {
                         is ShelfItem.Local -> LocalCell(item.book,
                             onOpen = {
                                 when (item.book.kind) {
-                                    LocalKind.PDF -> viewingPdf = File(LocalBooks.dirOf(item.book), item.book.sourceName)
+                                    LocalKind.PDF -> router.push(PdfDest(File(LocalBooks.dirOf(item.book), item.book.sourceName).absolutePath))
                                     LocalKind.COMIC -> router.push(LocalComicDest(item.book.id))
                                     LocalKind.NOVEL -> router.push(LocalNovelDest(item.book.id))
                                 }
@@ -303,7 +296,7 @@ fun BookshelfScreen(router: Router) {
             }
         }
         if (selecting) {
-            Surface(shape = RoundedCornerShape(50), shadowElevation = 6.dp,
+            GlassSurface(shape = RoundedCornerShape(50), prominent = true,
                 color = MaterialTheme.colorScheme.surface,
                 modifier = Modifier.align(Alignment.BottomCenter)
                     .padding(horizontal = 16.dp, vertical = 12.dp).fillMaxWidth()) {
@@ -329,19 +322,19 @@ fun BookshelfScreen(router: Router) {
     }
 
     if (importing) {
-        AlertDialog(onDismissRequest = {}, title = { Text("导入中") },
+        GlassAlertDialog(onDismissRequest = {}, title = { Text("导入中") },
             text = { Row(verticalAlignment = Alignment.CenterVertically) {
                 CircularProgressIndicator(color = Pink, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(12.dp)); Text("正在处理文件…")
             } }, confirmButton = {})
     }
     note?.let { msg ->
-        AlertDialog(onDismissRequest = { note = null }, title = { Text("导入结果") },
+        GlassAlertDialog(onDismissRequest = { note = null }, title = { Text("导入结果") },
             text = { Text(msg) },
             confirmButton = { TextButton(onClick = { note = null }) { Text("好", color = Pink) } })
     }
     deleteDl?.let { f ->
-        AlertDialog(onDismissRequest = { deleteDl = null },
+        GlassAlertDialog(onDismissRequest = { deleteDl = null },
             title = { Text("删除这本下载？") },
             text = { Text(DownloadManager.titleOf(context, f)) },
             confirmButton = { TextButton(onClick = {
@@ -354,7 +347,7 @@ fun BookshelfScreen(router: Router) {
         val selItems = gridItems.filter { selection.contains(itemKey(it)) }
         val localCount = selItems.count { it is ShelfItem.Local }
         val dlCount = selItems.size - localCount
-        AlertDialog(onDismissRequest = { showBatchDelete = false },
+        GlassAlertDialog(onDismissRequest = { showBatchDelete = false },
             title = { Text("删除所选书籍？") },
             text = { Text(when {
                 localCount > 0 && dlCount > 0 ->
@@ -377,7 +370,7 @@ fun BookshelfScreen(router: Router) {
             dismissButton = { TextButton(onClick = { showBatchDelete = false }) { Text("取消") } })
     }
     deleteLocal?.let { b ->
-        AlertDialog(onDismissRequest = { deleteLocal = null },
+        GlassAlertDialog(onDismissRequest = { deleteLocal = null },
             title = { Text("删除这本导入的书？") },
             text = { Text("《${b.title}》的文件会从设备上删除，删了要重新导入。") },
             confirmButton = { TextButton(onClick = { LocalBooks.delete(b); deleteLocal = null }) {
@@ -398,7 +391,7 @@ private fun SelectBadge(selected: Boolean, modifier: Modifier = Modifier) {
 
 @Composable
 private fun PageBadge(text: String, modifier: Modifier = Modifier) {
-    Surface(shape = RoundedCornerShape(50),
+    GlassSurface(shape = RoundedCornerShape(50),
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
         modifier = modifier) {
         Text(text, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -408,7 +401,7 @@ private fun PageBadge(text: String, modifier: Modifier = Modifier) {
 
 @Composable
 private fun FilterChip(label: String, selected: Boolean, onClick: () -> Unit) {
-    Surface(shape = RoundedCornerShape(50),
+    GlassSurface(shape = RoundedCornerShape(50),
         color = if (selected) Pink else MaterialTheme.colorScheme.surface,
         border = if (selected) null else androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         modifier = Modifier.clickable { onClick() }) {
@@ -469,7 +462,7 @@ private fun LocalCell(book: LocalBook, onOpen: () -> Unit, onLongPress: () -> Un
                 LocalKind.NOVEL -> book.sourceName.substringAfterLast('.', "").uppercase()
                 LocalKind.COMIC -> book.sourceName.substringAfterLast('.', "").uppercase()
             }
-            Surface(shape = RoundedCornerShape(6.dp), color = Color.Black.copy(alpha = 0.55f),
+            GlassSurface(shape = RoundedCornerShape(6.dp), color = Color.Black.copy(alpha = 0.55f),
                 modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp)) {
                 Text(badge, fontSize = 9.sp, color = Color.White,
                     modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp))
@@ -555,6 +548,16 @@ private fun LocalNovelReaderScreen(book: LocalBook, router: Router) {
     }
     var curChapter by remember(book.id) { mutableIntStateOf(startChapter) }
     var chrome by remember { mutableStateOf(true) }
+    val activity = LocalContext.current as? android.app.Activity
+    androidx.compose.runtime.DisposableEffect(activity, chrome) {
+        val controller = activity?.let {
+            androidx.core.view.WindowCompat.getInsetsController(it.window, it.window.decorView)
+        }
+        controller?.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        if (chrome) controller?.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+        else controller?.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+        onDispose { controller?.show(androidx.core.view.WindowInsetsCompat.Type.systemBars()) }
+    }
     var showToc by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
     var jumpChapter by remember { mutableStateOf<Int?>(null) }
@@ -592,7 +595,7 @@ private fun LocalNovelReaderScreen(book: LocalBook, router: Router) {
         }
     }
     if (showToc) {
-        AlertDialog(onDismissRequest = { showToc = false },
+        GlassAlertDialog(onDismissRequest = { showToc = false },
             title = { Text("目录") },
             text = {
                 LazyColumn(Modifier.height(400.dp)) {
@@ -608,7 +611,7 @@ private fun LocalNovelReaderScreen(book: LocalBook, router: Router) {
             confirmButton = { TextButton(onClick = { showToc = false }) { Text("关闭", color = Pink) } })
     }
     if (showMenu) {
-        AlertDialog(onDismissRequest = { showMenu = false },
+        GlassAlertDialog(onDismissRequest = { showMenu = false },
             title = { Text("阅读设置") },
             text = {
                 Column {

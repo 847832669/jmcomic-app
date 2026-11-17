@@ -330,48 +330,6 @@ object BlockTags {
     }
 }
 
-/** Online reading history for the bookshelf's 最近阅读 rail — the Android
- *  counterpart of iOS's LibraryStore.progress (Android had no reading-
- *  progress store before v2.30). Newest first, one entry per album,
- *  capped at 50. In-memory list is Compose state; persistence is plain
- *  SharedPreferences JSON, written on each record (records are throttled
- *  by the reader's page-change effect). */
-object ReadHistory {
-    data class Entry(val albumId: String, val title: String, val chapterId: String, val page: Int, val ts: Long)
-
-    private var prefs: SharedPreferences? = null
-    var entries by mutableStateOf<List<Entry>>(emptyList())
-        private set
-
-    fun init(context: Context) {
-        if (prefs != null) return
-        val p = context.getSharedPreferences("jm.readhistory", Context.MODE_PRIVATE)
-        prefs = p
-        val arr = try { JSONArray(p.getString("entries", "[]") ?: "[]") } catch (e: Exception) { JSONArray() }
-        val out = mutableListOf<Entry>()
-        for (i in 0 until arr.length()) {
-            val o = arr.optJSONObject(i) ?: continue
-            val id = o.optString("albumId")
-            if (id.isEmpty()) continue
-            out.add(Entry(id, o.optString("title"), o.optString("chapterId"), o.optInt("page"), o.optLong("ts")))
-        }
-        entries = out
-    }
-
-    fun record(albumId: String, title: String, chapterId: String, page: Int) {
-        if (albumId.isEmpty() || chapterId.isEmpty()) return
-        val e = Entry(albumId, title, chapterId, page, System.currentTimeMillis())
-        entries = (listOf(e) + entries.filter { it.albumId != albumId }).take(50)
-        val arr = JSONArray()
-        for (en in entries) {
-            arr.put(JSONObject()
-                .put("albumId", en.albumId).put("title", en.title)
-                .put("chapterId", en.chapterId).put("page", en.page).put("ts", en.ts))
-        }
-        prefs?.edit()?.putString("entries", arr.toString())?.apply()
-    }
-}
-
 /** Reading statistics (mirror of iOS v2.19): albums/chapters counted once,
  * pages counted only as actually reached (per-episode furthest page),
  * plus reading time. The v1 counting added a chapter's full page count the
@@ -465,8 +423,11 @@ object ReadingStats {
 
 /** App settings (mirror of the iOS SettingsView): auto check-in, reader mode. */
 object Settings {
+    private val themeModes = setOf("system", "light", "dark")
     private var prefs: SharedPreferences? = null
     var autoCheckIn by mutableStateOf(true)
+        private set
+    var themeMode by mutableStateOf("system")
         private set
     var readerMode by mutableStateOf("scroll") // "scroll" | "page"
         private set
@@ -474,9 +435,11 @@ object Settings {
         private set
     var recommendForYou by mutableStateOf(false)
         private set
-    var novelMode by mutableStateOf("scroll") // "scroll" | "paged"
+    var novelMode by mutableStateOf("scroll")
         private set
     var novelFontSize by mutableIntStateOf(17)
+        private set
+    var commentBlockedKeywords by mutableStateOf<List<String>>(emptyList())
         private set
 
     fun init(context: Context) {
@@ -484,19 +447,42 @@ object Settings {
         val p = context.getSharedPreferences("jm.settings", Context.MODE_PRIVATE)
         prefs = p
         autoCheckIn = p.getBoolean("autoCheckIn", true)
+        themeMode = p.getString("themeMode", "system")?.takeIf { it in themeModes } ?: "system"
         readerMode = p.getString("readerMode", "scroll") ?: "scroll"
         readerRtl = p.getBoolean("readerRtl", false)
         recommendForYou = p.getBoolean("recommendForYou", false)
         novelMode = p.getString("novelMode", "scroll") ?: "scroll"
         novelFontSize = p.getInt("novelFontSize", 17)
+        commentBlockedKeywords = p.getStringSet("commentBlockedKeywords", emptySet())
+            .orEmpty().toList().distinctBy { it.lowercase() }.sortedBy { it.lowercase() }
     }
 
     fun updateAutoCheckIn(v: Boolean) { autoCheckIn = v; prefs?.edit()?.putBoolean("autoCheckIn", v)?.apply() }
+    fun updateThemeMode(v: String) {
+        if (v !in themeModes) return
+        themeMode = v
+        prefs?.edit()?.putString("themeMode", v)?.apply()
+    }
     fun updateRecommendForYou(v: Boolean) { recommendForYou = v; prefs?.edit()?.putBoolean("recommendForYou", v)?.apply() }
     fun updateNovelMode(v: String) { novelMode = v; prefs?.edit()?.putString("novelMode", v)?.apply() }
     fun updateNovelFontSize(v: Int) { novelFontSize = v; prefs?.edit()?.putInt("novelFontSize", v)?.apply() }
     fun updateReaderMode(v: String) { readerMode = v; prefs?.edit()?.putString("readerMode", v)?.apply() }
     fun updateReaderRtl(v: Boolean) { readerRtl = v; prefs?.edit()?.putBoolean("readerRtl", v)?.apply() }
+    fun addCommentBlockedKeyword(raw: String): Boolean {
+        val keyword = raw.trim()
+        if (keyword.isEmpty() || commentBlockedKeywords.any { it.equals(keyword, ignoreCase = true) }) return false
+        updateCommentBlockedKeywords(commentBlockedKeywords + keyword)
+        return true
+    }
+    fun removeCommentBlockedKeyword(keyword: String) {
+        updateCommentBlockedKeywords(commentBlockedKeywords.filterNot { it == keyword })
+    }
+    private fun updateCommentBlockedKeywords(values: List<String>) {
+        val unique = values.map(String::trim).filter(String::isNotEmpty)
+            .distinctBy { it.lowercase() }.sortedBy { it.lowercase() }
+        commentBlockedKeywords = unique
+        prefs?.edit()?.putStringSet("commentBlockedKeywords", unique.toSet())?.apply()
+    }
 
     var autoCheckinDay: String
         get() = prefs?.getString("autoCheckinDay", "") ?: ""
