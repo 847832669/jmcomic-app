@@ -12,6 +12,7 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -90,7 +91,7 @@ fun GlassWallpaper(modifier: Modifier = Modifier) {
     }
 }
 
-/** The same upstream LiquidGlassView material under every surface and navigation lens. */
+/** Rounded theme surface by default; only navigation explicitly opts into native glass. */
 @Composable
 fun GlassSurface(
     modifier: Modifier = Modifier,
@@ -105,9 +106,20 @@ fun GlassSurface(
     refractionHeight: Dp = 20.dp,
     refractionOffset: Dp = 70.dp,
     dispersion: Float = 0.5f,
+    liquidGlass: Boolean = false,
     onClick: (() -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
+    if (!liquidGlass) {
+        Surface(
+            modifier = modifier.then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
+            shape = shape, color = color, border = border,
+            shadowElevation = if (prominent) 2.dp else 0.dp,
+        ) {
+            Box(propagateMinConstraints = true) { content() }
+        }
+        return
+    }
     val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
     val density = LocalDensity.current
     val direction = LocalLayoutDirection.current
