@@ -91,7 +91,7 @@ fun JmTheme(content: @Composable () -> Unit) {
     }
 }
 
-/** Shared glass material for profile, settings, storage and download panels. */
+/** Shared rounded theme surface for profile, settings, storage and download panels. */
 @Composable
 fun IosCard(modifier: Modifier = Modifier, radius: androidx.compose.ui.unit.Dp = 20.dp,
             onClick: (() -> Unit)? = null, content: @Composable () -> Unit) {

@@ -3,7 +3,6 @@ package com.denia.jmreader
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
@@ -80,18 +79,6 @@ fun LiquidGlassBottomBar(selectedPage: Int, pagePosition: Float, backdrop: Glass
         spring(0.8f, 600f), label = "navigationLens")
     val barShift by animateFloatAsState(shiftTarget,
         spring(0.85f, 450f), label = "navigationShift")
-    val refractIcons = touching || abs(position - selectedPage) > 0.01f
-    val iconOpticalProgress by animateFloatAsState(if (refractIcons) 1f else 0f,
-        spring(1f, 600f), label = "navigationIconOptics")
-    val tabAppearance = items.mapIndexed { index, _ ->
-        val down by tabInteractions[index].collectIsPressedAsState()
-        val scale by animateFloatAsState(if (down) 0.94f else 1f,
-            spring(0.8f, 600f), label = "navigationPress")
-        val active = if (dragging != null) abs(position - index) < 0.5f else selectedPage == index
-        val tint by animateColorAsState(if (active) MaterialTheme.colorScheme.primary
-            else if (dark) Color.White else Color.Black, label = "navigationTint")
-        tint to scale
-    }
     val latestSelect by rememberUpdatedState(onSelect)
     val latestPosition by rememberUpdatedState(target)
     val latestShift by rememberUpdatedState(barShift)
@@ -141,61 +128,50 @@ fun LiquidGlassBottomBar(selectedPage: Int, pagePosition: Float, backdrop: Glass
             }
         }
     }) {
-        BoxWithConstraints(Modifier.fillMaxSize().graphicsLayer { translationX = barShift }) {
+        // Layout-offset the complete bar so Compose recording coordinates and the native
+        // sampling Views move with it; a draw-only matrix left the glass source behind.
+        BoxWithConstraints(Modifier.fillMaxSize().offset(x = with(density) { barShift.toDp() })) {
             val barWidth = maxWidth
-            // Record the page, frosted bar and icons before the top lens. Labels are
-            // painted separately so optical displacement cannot duplicate their glyphs.
+            // Record only the page and frosted bar. The four icons and labels belong to
+            // one fixed foreground row, so moving the lens cannot displace their glyphs.
             // Extra sampling space preserves page content around the enlarged capsule.
             Box(Modifier.requiredSize(barWidth + 56.dp, barHeight + 56.dp).align(Alignment.Center)
                 .clipToBounds().glassBackdrop(frostedBackdrop, background = backdrop)) {
                 GlassSurface(Modifier.width(barWidth).height(barHeight).align(Alignment.Center),
+                    liquidGlass = true,
                     shape = CircleShape, radius = barHeight / 2, backdrop = backdrop,
                     prominent = true, tintStrength = 0.5f, blurRadius = 12.dp) {}
-                Row(Modifier.width(barWidth).height(barHeight).align(Alignment.Center)
-                    .padding(4.dp).clearAndSetSemantics {}) {
-                    items.forEachIndexed { index, (_, icon) ->
-                        val (tint, scale) = tabAppearance[index]
-                        Column(Modifier.weight(1f).fillMaxHeight()
-                            .graphicsLayer { scaleX = scale; scaleY = scale; alpha = iconOpticalProgress },
-                            horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                            Icon(icon, null, tint = tint, modifier = Modifier.size(24.dp))
-                            Spacer(Modifier.height(2.dp))
-                            // Match the actual label's scaled line height in the foreground.
-                            Spacer(Modifier.height(with(density) { 12.sp.toDp() }))
-                        }
-                    }
-                }
             }
             BoxWithConstraints(Modifier.fillMaxSize().padding(4.dp)) {
                 val tabWidth = maxWidth / 4
                 val lensWidth = tabWidth * (1f + 0.18f * pressProgress)
                 val lensHeight = restingLensHeight + (72.dp - restingLensHeight) * pressProgress
-                // Respect the library's minimum 12dp height and 20dp offset. Resting
-                // icons are drawn in the foreground rather than being bent by this rim.
+                // Only the glass selection moves between tabs. Its sampling never
+                // includes the foreground row, keeping tab content anchored to the bar.
                 GlassSurface(Modifier.offset(x = tabWidth * position + (tabWidth - lensWidth) / 2,
                     y = (restingLensHeight - lensHeight) / 2)
                     .wrapContentSize(Alignment.TopStart, unbounded = true).size(lensWidth, lensHeight),
+                    liquidGlass = true,
                     shape = CircleShape, radius = lensHeight / 2, backdrop = frostedBackdrop,
                     tintStrength = 0f, refractionHeight = 12.dp,
                     refractionOffset = 20.dp + 25.dp * pressProgress,
                     dispersion = 0.15f + 0.85f * pressProgress) {}
             }
-            // Labels stay sharp above the optics in every gesture state. Their input
-            // and semantics share the same fixed hit areas as the underlying icons.
+            // A single content row shares the bar's layout offset in every gesture state.
+            // Icons never crossfade into a separately sampled or scaled copy.
             Row(Modifier.fillMaxSize().padding(4.dp).selectableGroup()) {
                 items.forEachIndexed { index, (label, icon) ->
-                    val (tint, scale) = tabAppearance[index]
                     val active = if (dragging != null) abs(position - index) < 0.5f else selectedPage == index
+                    val tint by animateColorAsState(if (active) MaterialTheme.colorScheme.primary
+                        else if (dark) Color.White else Color.Black, label = "navigationTint")
                     Box(Modifier.weight(1f).fillMaxHeight()
                         .semantics { contentDescription = label }
                         .selectable(selectedPage == index, role = Role.Tab,
                             interactionSource = tabInteractions[index], indication = null,
                             onClick = { releasedPage = null; onSelect(index) }),
                         contentAlignment = Alignment.Center) {
-                        Column(Modifier.graphicsLayer { scaleX = scale; scaleY = scale }
-                            .clearAndSetSemantics {}, horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(icon, null, tint = tint, modifier = Modifier.size(24.dp)
-                                .graphicsLayer { alpha = 1f - iconOpticalProgress })
+                        Column(Modifier.clearAndSetSemantics {}, horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(icon, null, tint = tint, modifier = Modifier.size(24.dp))
                             Spacer(Modifier.height(2.dp))
                             Text(label, color = tint, fontSize = 10.sp, lineHeight = 12.sp,
                                 fontWeight = if (active) FontWeight.Bold else FontWeight.Normal, maxLines = 1)
