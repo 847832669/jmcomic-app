@@ -1,8 +1,11 @@
 package com.denia.jmreader
 
 import android.graphics.Bitmap
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -12,10 +15,18 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -45,6 +56,19 @@ fun ReaderScreen(dest: ReaderDest, router: Router, source: ComicReaderSource = O
     var error by remember(dest.chapterId) { mutableStateOf<String?>(null) }
     var retry by remember(dest.chapterId) { mutableIntStateOf(0) }
     var start by remember(dest.chapterId) { mutableStateOf(ComicPosition(0)) }
+    var chrome by remember(dest.albumId) { mutableStateOf(true) }
+    BackHandler(enabled = !chrome) { chrome = true }
+    val activity = LocalContext.current as? android.app.Activity
+    DisposableEffect(activity, chrome) {
+        val controller = activity?.let {
+            androidx.core.view.WindowCompat.getInsetsController(it.window, it.window.decorView)
+        }
+        controller?.systemBarsBehavior =
+            androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        if (chrome) controller?.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+        else controller?.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+        onDispose { controller?.show(androidx.core.view.WindowInsetsCompat.Type.systemBars()) }
+    }
     LaunchedEffect(dest.chapterId, retry) {
         error = null
         try {
@@ -63,7 +87,7 @@ fun ReaderScreen(dest: ReaderDest, router: Router, source: ComicReaderSource = O
                 albumId = dest.albumId.ifEmpty { dest.chapterId },
                 chapterId = dest.chapterId)
         } catch (e: CancellationException) { throw e }
-        catch (e: Exception) { error = e.message ?: "加载失败" }
+        catch (e: Exception) { error = e.message ?: "加载失败"; chrome = true }
     }
     LaunchedEffect(chapter, dest.chapterId) {
         val ch = chapter ?: return@LaunchedEffect
@@ -91,11 +115,13 @@ fun ReaderScreen(dest: ReaderDest, router: Router, source: ComicReaderSource = O
     Column(Modifier.fillMaxSize()) {
         val ch = chapter
         if (ch == null) {
-            TopBar(title = dest.albumTitle) { router.pop() }
+            if (chrome || error != null) TopBar(title = dest.albumTitle) { router.pop() }
             if (error != null) ErrorText(error!!) { retry++ } else LoadingBox()
             return@Column
         }
-        key(dest.albumId, dest.chapterId) { ComicReaderContent(dest, router, ch, start, source) }
+        key(dest.albumId, dest.chapterId) {
+            ComicReaderContent(dest, router, ch, start, source, chrome, { chrome = it })
+        }
     }
 }
 
@@ -119,7 +145,8 @@ private suspend fun readerBitmap(source: ComicReaderSource, chapterId: String, f
 @OptIn(FlowPreview::class)
 @Composable
 private fun ColumnScope.ComicReaderContent(dest: ReaderDest, router: Router, ch: JSONObject,
-                                          start: ComicPosition, source: ComicReaderSource) {
+                                          start: ComicPosition, source: ComicReaderSource,
+                                          chrome: Boolean, onChromeChange: (Boolean) -> Unit) {
         val imagesArr = ch.optJSONArray("images")
         val files = (0 until (imagesArr?.length() ?: 0)).map { imagesArr!!.optString(it) }
         val series = parseSeries(ch, dest.chapterId)
@@ -129,8 +156,30 @@ private fun ColumnScope.ComicReaderContent(dest: ReaderDest, router: Router, ch:
         val scrollPage by remember { derivedStateOf { (listState.firstVisibleItemIndex + 1).coerceIn(1, maxOf(1, files.size)) } }
         var mode by remember { mutableStateOf(Settings.readerMode) }
         var rtl by remember { mutableStateOf(Settings.readerRtl) }
+        var openingNextChapter by remember(dest.chapterId) { mutableStateOf(false) }
         var pageIdx by remember(dest.chapterId) { mutableIntStateOf(start.page) }
         val pageNow = if (mode == "page") (pageIdx + 1).coerceIn(1, maxOf(1, files.size)) else scrollPage
+        val nextChapterId = if (curIdx >= 0 && files.isNotEmpty()) series.getOrNull(curIdx + 1)?.first else null
+        val scrollEndSwipeThreshold = with(androidx.compose.ui.platform.LocalDensity.current) { 72.dp.toPx() }
+        val readerTapHandler = rememberReaderTapHandler(
+            isScrolling = { mode != "page" && listState.isScrollInProgress },
+        ) { position, size ->
+            when {
+                mode == "page" && position.x < size.width * 0.3f ->
+                    pageIdx = (if (rtl) pageIdx + 1 else pageIdx - 1).coerceIn(0, maxOf(0, files.lastIndex))
+                mode == "page" && position.x > size.width * 0.7f ->
+                    pageIdx = (if (rtl) pageIdx - 1 else pageIdx + 1).coerceIn(0, maxOf(0, files.lastIndex))
+                position.x in (size.width * 0.3f)..(size.width * 0.7f) &&
+                    position.y in (size.height * 0.25f)..(size.height * 0.75f) -> onChromeChange(!chrome)
+            }
+        }
+        val openNextChapter by rememberUpdatedState(newValue = {
+            if (!openingNextChapter && nextChapterId != null) {
+                openingNextChapter = true
+                router.pop()
+                router.push(ReaderDest(nextChapterId, dest.albumTitle, dest.albumId, startPage = 0, startOffset = 0))
+            }
+        })
         // Reading stats: count pages as they are actually reached (both
         // modes funnel through pageNow), never the whole chapter at open.
         LaunchedEffect(pageNow, dest.chapterId) {
@@ -159,34 +208,36 @@ private fun ColumnScope.ComicReaderContent(dest: ReaderDest, router: Router, ch:
             onDispose { savePosition(); lifecycle.removeObserver(observer) }
         }
 
-        GlassSurface(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp)) {
-            Column {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = { router.pop() }) { Text("‹ 返回", color = Pink, fontSize = 15.sp) }
-                    Column(Modifier.weight(1f)) {
-                        Text(ch.optString("name").ifEmpty { dest.albumTitle }, fontSize = 14.sp, fontWeight = FontWeight.Bold,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(dest.albumTitle, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                    Text("$pageNow / ${files.size}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = {
-                        savePosition()
-                        if (mode == "page") {
-                            listState.requestScrollToItem(pageIdx)
-                            mode = "scroll"
-                        } else {
-                            pageIdx = (scrollPage - 1).coerceIn(0, maxOf(0, files.size - 1))
-                            mode = "page"
+        if (chrome) {
+            GlassSurface(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp)) {
+                Column {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = { router.pop() }) { Text("‹ 返回", color = Pink, fontSize = 15.sp) }
+                        Column(Modifier.weight(1f)) {
+                            Text(ch.optString("name").ifEmpty { dest.albumTitle }, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(dest.albumTitle, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
-                        Settings.updateReaderMode(mode)
-                    }) { Text(if (mode == "page") "翻页模式 · 切回滚动" else "滚动模式 · 切到翻页", color = Pink, fontSize = 12.sp) }
-                    Spacer(Modifier.weight(1f))
-                    if (mode == "page") {
-                        TextButton(onClick = { rtl = !rtl; Settings.updateReaderRtl(rtl) }) {
-                            Text(if (rtl) "方向：从右往左" else "方向：从左往右", color = Pink, fontSize = 12.sp)
+                        Text("$pageNow / ${files.size}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = {
+                            savePosition()
+                            if (mode == "page") {
+                                listState.requestScrollToItem(pageIdx)
+                                mode = "scroll"
+                            } else {
+                                pageIdx = (scrollPage - 1).coerceIn(0, maxOf(0, files.size - 1))
+                                mode = "page"
+                            }
+                            Settings.updateReaderMode(mode)
+                        }) { Text(if (mode == "page") "翻页模式 · 切回滚动" else "滚动模式 · 切到翻页", color = Pink, fontSize = 12.sp) }
+                        Spacer(Modifier.weight(1f))
+                        if (mode == "page") {
+                            TextButton(onClick = { rtl = !rtl; Settings.updateReaderRtl(rtl) }) {
+                                Text(if (rtl) "方向：从右往左" else "方向：从左往右", color = Pink, fontSize = 12.sp)
+                            }
                         }
                     }
                 }
@@ -194,27 +245,101 @@ private fun ColumnScope.ComicReaderContent(dest: ReaderDest, router: Router, ch:
         }
         if (mode == "page" && files.isNotEmpty()) {
             val idx = pageIdx.coerceIn(0, files.size - 1)
-            Box(Modifier.weight(1f).fillMaxWidth()) {
+            var endSwipeDistance by remember(dest.chapterId) { mutableFloatStateOf(0f) }
+            val density = androidx.compose.ui.platform.LocalDensity.current
+            val endSwipeThreshold = with(density) { 96.dp.toPx() }
+            Box(Modifier.weight(1f).fillMaxWidth().then(readerTapHandler).then(
+                if (chrome || idx != files.lastIndex || nextChapterId == null) Modifier else Modifier.pointerInput(dest.chapterId, idx) {
+                    detectVerticalDragGestures(
+                        onVerticalDrag = { change, dragAmount ->
+                            if (dragAmount < 0f) {
+                                endSwipeDistance += -dragAmount
+                                change.consume()
+                                if (endSwipeDistance >= endSwipeThreshold) {
+                                    endSwipeDistance = 0f
+                                    openNextChapter()
+                                }
+                            } else {
+                                endSwipeDistance = 0f
+                            }
+                        },
+                        onDragEnd = { endSwipeDistance = 0f },
+                        onDragCancel = { endSwipeDistance = 0f },
+                    )
+                }
+            )) {
                 ReaderPage(dest.chapterId, files[idx], source)
-                Row(Modifier.fillMaxSize()) {
-                    Box(Modifier.weight(0.3f).fillMaxHeight().clickable {
-                        pageIdx = (if (rtl) idx + 1 else idx - 1).coerceIn(0, files.size - 1)
-                    })
-                    Box(Modifier.weight(0.4f).fillMaxHeight())
-                    Box(Modifier.weight(0.3f).fillMaxHeight().clickable {
-                        pageIdx = (if (rtl) idx - 1 else idx + 1).coerceIn(0, files.size - 1)
-                    })
+            }
+            if (chrome) ChapterNavRow(curIdx, series, dest, router)
+        } else {
+            val endOverscroll = remember(dest.chapterId, nextChapterId, chrome) {
+                object : NestedScrollConnection {
+                    private var accumulated = 0f
+                    private var triggered = false
+                    override fun onPostScroll(
+                        consumed: androidx.compose.ui.geometry.Offset,
+                        available: androidx.compose.ui.geometry.Offset,
+                        source: NestedScrollSource,
+                    ): androidx.compose.ui.geometry.Offset {
+                        if (chrome || nextChapterId == null || listState.canScrollForward || source != NestedScrollSource.UserInput) {
+                            accumulated = 0f
+                            triggered = false
+                            return androidx.compose.ui.geometry.Offset.Zero
+                        }
+                        if (available.y < 0f) {
+                            accumulated -= available.y
+                            if (!triggered && accumulated >= scrollEndSwipeThreshold) {
+                                triggered = true
+                                openNextChapter()
+                            }
+                        } else if (available.y > 0f) {
+                            accumulated = 0f
+                            triggered = false
+                        }
+                        return androidx.compose.ui.geometry.Offset.Zero
+                    }
                 }
             }
-            ChapterNavRow(curIdx, series, dest, router)
-        } else {
-            LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth()) {
-                itemsIndexed(files, key = { i, f -> "$i-$f" }) { _, file ->
-                    ReaderPage(dest.chapterId, file, source)
+            Box(Modifier.weight(1f).fillMaxWidth().then(readerTapHandler)) {
+                LazyColumn(state = listState, modifier = Modifier.fillMaxSize()
+                    .then(if (chrome) Modifier else Modifier.nestedScroll(endOverscroll))) {
+                    itemsIndexed(files, key = { i, f -> "$i-$f" }) { _, file ->
+                        ReaderPage(dest.chapterId, file, source)
+                    }
+                    if (chrome) item { ChapterNavRow(curIdx, series, dest, router) }
                 }
-                item { ChapterNavRow(curIdx, series, dest, router) }
             }
         }
+}
+
+@Composable
+private fun rememberReaderTapHandler(isScrolling: () -> Boolean, onTap: (Offset, IntSize) -> Unit): Modifier {
+    val currentOnTap = rememberUpdatedState(onTap)
+    val currentIsScrolling = rememberUpdatedState(isScrolling)
+    return remember {
+        Modifier.pointerInput(Unit) {
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                // Observe alongside the list; never put a clickable overlay above it.
+                // A tap that merely stops a fling must not toggle the reader controls.
+                var canceled = currentIsScrolling.value()
+                var releasedAt = down.uptimeMillis
+                while (true) {
+                    val event = awaitPointerEvent(PointerEventPass.Final)
+                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                    val moved = (change.position - down.position).getDistance() > viewConfiguration.touchSlop
+                    if (moved || event.changes.size > 1) canceled = true
+                    if (!change.pressed) {
+                        releasedAt = change.uptimeMillis
+                        break
+                    }
+                }
+                if (!canceled && releasedAt - down.uptimeMillis < viewConfiguration.longPressTimeoutMillis) {
+                    currentOnTap.value(down.position, size)
+                }
+            }
+        }
+    }
 }
 
 @Composable
