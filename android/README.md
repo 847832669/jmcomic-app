@@ -1,6 +1,6 @@
 # JM Reader for Android
 
-JM Reader 的 Android 版本（Kotlin + Jetpack Compose），与 iOS 版使用同一数据源，在同一仓库维护。本分支当前版本为 **2.30-glass.8**（versionCode **26**），已合并上游 v2.30（`871aed1`）；下方发布包仍为 `2.19-glass.4`。
+JM Reader 的 Android 版本（Kotlin + Jetpack Compose），与 iOS 版使用同一数据源，在同一仓库维护。本分支当前版本为 **2.30-glass.9**（versionCode **27**），已同步上游 v2.30 及 Android 沉浸式顶部更新；下方发布包仍为 `2.19-glass.4`。
 
 ## 安装
 
