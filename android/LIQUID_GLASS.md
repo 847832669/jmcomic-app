@@ -1,6 +1,6 @@
 # 液态玻璃底栏与主题控件
 
-Android `2.30-glass.8` / versionCode `26` 仅在底栏及移动胶囊中使用 [QmDeve/AndroidLiquidGlassView](https://github.com/QmDeve/AndroidLiquidGlassView)。其余界面采用清晰的日夜主题表面，保留粉色强调和统一圆角。
+Android `2.30-glass.9` / versionCode `27` 仅在底栏及移动胶囊中使用 [QmDeve/AndroidLiquidGlassView](https://github.com/QmDeve/AndroidLiquidGlassView)。其余界面采用清晰的日夜主题表面，保留粉色强调和统一圆角。
 
 ## 渲染与布局
 

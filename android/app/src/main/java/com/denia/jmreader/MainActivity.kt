@@ -3,6 +3,7 @@ package com.denia.jmreader
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.*
@@ -20,6 +21,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // The wallpaper reaches behind the transparent status bar; each page
+        // retains its status-bar inset so controls remain below the system icons.
+        enableEdgeToEdge()
         if (savedInstanceState == null && intent?.action == android.content.Intent.ACTION_VIEW) {
             pdfUri = intent.data
         }
